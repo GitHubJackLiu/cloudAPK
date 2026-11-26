@@ -5,7 +5,7 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.hardware.Camera;
-import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.MediaPlayer;
@@ -124,17 +124,14 @@ public class MainActivity extends Activity {
                 pcm[i * 2] = (byte) (v & 0xff);
                 pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
             }
-            AudioTrack track = new AudioTrack.Builder()
-                    .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sr)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-                    .setBufferSizeInBytes(pcm.length)
-                    .setMode(AudioTrack.MODE_STATIC)
-                    .build();
+            // 用传统构造函数：Builder 没有 setMode，且 Android 8.1 下 MODE_STATIC 稳定
+            AudioTrack track = new AudioTrack(
+                    AudioManager.STREAM_MUSIC,
+                    sr,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    pcm.length,
+                    AudioTrack.MODE_STATIC);
             track.write(pcm, 0, pcm.length);
             track.play();
             status.setText("喇叭响 2 秒（1kHz）——听到即正常");
