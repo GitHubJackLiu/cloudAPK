@@ -9,8 +9,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -168,19 +168,23 @@ public class UpdateChecker {
     }
 
     /**
-     * 下载 APK 到公共目录，再 root 静默安装。必须在后台线程调用。
+     * 下载 APK 到内存，经 root 的 stdin 管道写到 /sdcard/Download，再静默安装。
+     * 必须在后台线程调用。
      *
-     * 落地路径选 /sdcard/Download 而不是 App 私有 cacheDir：这台 ROM 的
-     * Magisk root 受 SELinux 隔离，读不到 /data/data/com.xiaodu.voice/*，
-     * 但能读写 /sdcard/Download。App 自身对 sdcard 有写权限，下载直接落这里，
-     * 安装时 su -c "pm install -r" 从同一路径读，双方都能访问。
+     * 为什么这么绕（实测踩坑）：
+     *   1. App 无权写 /sdcard/Download（Manifest 没有 WRITE_EXTERNAL_STORAGE，
+     *      Android 8.1 下 FileOutputStream 直接 Permission denied）。
+     *   2. root 也读不到 App 私有目录 /data/data/com.xiaodu.voice/*（Magisk SELinux 隔离）。
+     *   3. 所以走 stdin 管道：App 下载到内存 byte[]，起 su -c "cat > 公共路径"，
+     *      把字节流写进该进程 stdin —— 双方都不需要访问对方的文件系统。
+     *   这正是 PC 通过 SSH 传 APK 到设备的原理。
      *
      * @param progress 进度回调，可为 null
      * @return {ok, installed, err, path, size}
      */
     public JSONObject downloadAndInstall(String url, long expectedSize, Progress progress) {
         JSONObject out = new JSONObject();
-        final File apk = new File("/sdcard/Download/xz-update.apk");
+        final String path = "/sdcard/Download/xz-update.apk";
         try {
             if (progress != null) progress.on(0, "downloading", "开始下载…");
 
@@ -197,28 +201,28 @@ public class UpdateChecker {
                 return out;
             }
 
+            // 下载到内存（APK 约 0.5MB，直接驻留内存无压力）
             long total = c.getContentLength();
             InputStream is = c.getInputStream();
-            OutputStream os = new FileOutputStream(apk);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
             byte[] buf = new byte[16384];
             int n, got = 0;
             int lastPct = -1;
             while ((n = is.read(buf)) > 0) {
-                os.write(buf, 0, n);
+                bos.write(buf, 0, n);
                 got += n;
                 if (total > 0 && progress != null) {
                     int pct = (int) (got * 100 / total);
                     if (pct != lastPct) { progress.on(pct, "downloading", "下载中"); lastPct = pct; }
                 }
             }
-            os.flush();
-            os.close();
             is.close();
             c.disconnect();
+            byte[] apkBytes = bos.toByteArray();
 
-            long size = apk.length();
+            long size = apkBytes.length;
             put(out, "size", size);
-            put(out, "path", apk.getAbsolutePath());
+            put(out, "path", path);
             if (size <= 0) {
                 put(out, "ok", false);
                 put(out, "err", "empty download");
@@ -233,7 +237,16 @@ public class UpdateChecker {
             }
 
             if (progress != null) progress.on(100, "installing", "正在安装…");
-            String res = su("pm install -r " + apk.getAbsolutePath());
+            // 通过 stdin 把字节流喂给 root 的 cat，落到公共路径
+            String writeRes = suFeed("cat > " + path, apkBytes);
+            Log.i(TAG, "write apk: " + clip(writeRes, 120));
+            if (writeRes != null && writeRes.toLowerCase().contains("permission denied")) {
+                put(out, "ok", false);
+                put(out, "err", "write: " + clip(writeRes, 160));
+                return out;
+            }
+
+            String res = su("pm install -r " + path);
             Log.i(TAG, "pm install: " + clip(res, 200));
             boolean ok = res != null && res.toLowerCase().contains("success");
             put(out, "ok", ok);
@@ -249,6 +262,30 @@ public class UpdateChecker {
             Log.w(TAG, "downloadAndInstall failed: " + t);
             return out;
         }
+    }
+
+    /** 执行 su -c 命令并把 data 写进其 stdin，返回合并输出（stdout+stderr） */
+    private String suFeed(String cmd, byte[] data) {
+        StringBuilder sb = new StringBuilder();
+        Process p = null;
+        try {
+            p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+            OutputStream os = p.getOutputStream();
+            os.write(data);
+            os.flush();
+            os.close();
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line).append('\n');
+            BufferedReader er = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+            while ((line = er.readLine()) != null) sb.append(line).append('\n');
+            p.waitFor();
+        } catch (Throwable t) {
+            sb.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage());
+        } finally {
+            if (p != null) try { p.destroy(); } catch (Exception ignored) { }
+        }
+        return sb.toString();
     }
 
     /** 执行 su -c 命令，返回合并输出（stdout+stderr） */
