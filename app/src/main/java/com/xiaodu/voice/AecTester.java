@@ -139,6 +139,8 @@ public class AecTester {
             r.note = "异常 " + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
         if (cb != null) cb.onProgress(name, r);
+        Log.i(TAG, String.format("%s | ref=%.1f echo=%.1f ERLE=%.1f | %s",
+                name, r.refDb, r.echoDb, r.erle, r.note == null ? "" : r.note));
         return r;
     }
 

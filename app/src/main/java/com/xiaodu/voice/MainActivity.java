@@ -115,6 +115,9 @@ public class MainActivity extends Activity {
         session.setBridge(bridge);
         webView.addJavascriptInterface(bridge, "Native");
 
+        // 冷启动时也响应广播命令
+        handleCommand(getIntent());
+
         webView.loadUrl("file:///android_asset/index.html");
         applyImmersive();
         ensurePermissions();
@@ -294,6 +297,27 @@ public class MainActivity extends Activity {
         while ((line = br.readLine()) != null) sb.append(line);
         br.close();
         return sb.toString();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleCommand(intent);
+    }
+
+    /**
+     * 支持用 adb 广播触发动作，避免设备上无法可靠注入按键/手势。
+     *   adb shell am broadcast -a com.xiaodu.voice.AEC -n com.xiaodu.voice/.MainActivity
+     */
+    private void handleCommand(Intent intent) {
+        if (intent == null || intent.getAction() == null) return;
+        String a = intent.getAction();
+        if ("com.xiaodu.voice.AEC".equals(a)) {
+            Log.i(TAG, "cmd: run AEC matrix");
+            if (bridge != null) bridge.runAecMatrixNow();
+        } else if ("com.xiaodu.voice.PANEL".equals(a)) {
+            if (bridge != null) bridge.showAecPanel();
+        }
     }
 
     @Override

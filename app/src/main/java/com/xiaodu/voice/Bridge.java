@@ -216,6 +216,37 @@ public class Bridge {
         aec.cancel();
     }
 
+    /**
+     * 直接打开 AEC 实验面板。
+     * 不依赖手势：设备上 input swipe 的长按不可靠，而原生调 JS 最稳。
+     */
+    @JavascriptInterface
+    public void showAecPanel() {
+        ui.post(() -> {
+            try {
+                act.webView.evaluateJavascript(
+                        "window.showAecPanel && window.showAecPanel()", null);
+            } catch (Throwable t) {
+                Log.w(TAG, "showAecPanel failed: " + t);
+            }
+        });
+    }
+
+    /** 原生直接触发矩阵（供 adb / SSH 自动化用，无需屏幕点击） */
+    @JavascriptInterface
+    public void runAecMatrixNow() {
+        // 页面可能还没加载完，延后一点再调 JS
+        ui.postDelayed(() -> {
+            try {
+                act.webView.evaluateJavascript(
+                        "window.showAecPanel && window.showAecPanel();"
+                                + "window.runAecMatrix && window.runAecMatrix()", null);
+            } catch (Throwable t) {
+                Log.w(TAG, "runAecMatrixNow failed: " + t);
+            }
+        }, 1500);
+    }
+
     /** 当前音频通路参数，供网页显示 */
     @JavascriptInterface
     public String getAudioPath() {

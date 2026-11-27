@@ -195,6 +195,30 @@
     for (var i = 0; i < cps.length; i++){ if (EMOJI2EMO[cps[i]]) return EMOJI2EMO[cps[i]]; }
     return '';
   }
+  /**
+   * 加载表情 JSON。
+   * 注意：页面从 file:///android_asset/ 加载，fetch() 在 file:// 下直接报
+   * "URL scheme file is not supported"，必须用 XMLHttpRequest。
+   */
+  function loadJson(url, cb){
+    try {
+      var x = new XMLHttpRequest();
+      x.open('GET', url, true);
+      x.onload = function(){
+        if (x.status === 0 || x.status === 200){
+          try { cb(JSON.parse(x.responseText)); }
+          catch(e){ console.log('parse fail ' + url); }
+        } else {
+          console.log('load fail ' + url + ' status=' + x.status);
+        }
+      };
+      x.onerror = function(){ console.log('xhr error ' + url); };
+      x.send(null);
+    } catch(e){
+      console.log('xhr throw ' + e.message);
+    }
+  }
+
   function setEmotion(name, holdMs){
     name = (EMOTIONS.indexOf(name) >= 0) ? name : 'neutral';
     if (emoTimer){ clearTimeout(emoTimer); emoTimer = null; }
@@ -202,15 +226,14 @@
     if (name === emoNow && emoAnim) return;
     emoNow = name;
     var seq = ++emoLoad;
-    fetch('emoji/' + name + '.json').then(function(r){ return r.json(); })
-      .then(function(data){
-        if (seq !== emoLoad) return;
-        if (emoAnim) emoAnim.destroy();
-        emoAnim = lottie.loadAnimation({
-          container: $('lottieBox'), renderer: 'svg',
-          loop: true, autoplay: true, animationData: data
-        });
-      }).catch(function(){});
+    loadJson('emoji/' + name + '.json', function(data){
+      if (seq !== emoLoad) return;              // 已被更新的请求取代
+      if (emoAnim) emoAnim.destroy();
+      emoAnim = lottie.loadAnimation({
+        container: $('lottieBox'), renderer: 'svg',
+        loop: true, autoplay: true, animationData: data
+      });
+    });
   }
 
   function msg(text, cls){
@@ -384,12 +407,33 @@
     }
   };
   $('aecClose').onclick = function(){ aecPanel.classList.remove('show'); };
-  // 长按齿轮 800ms 打开 AEC 实验面板
+  // 供原生直接调用（设备上长按手势不可靠）
+  window.showAecPanel = function(){
+    aecPanel.classList.add('show');
+    aecOut.innerHTML = '';
+  };
+  window.runAecMatrix = function(){
+    aecOut.innerHTML = '';
+    if (hasNative){
+      try { window.Native.runAecMatrix(); } catch(e){ note('AEC 测试启动失败'); }
+    } else {
+      aecOut.innerHTML = '<div class="aresult">AEC 实验需要原生环境（Bridge）</div>';
+    }
+  };
+  // 双击齿轮打开 AEC 实验面板（长按也保留，方便手动操作）
   var gearTimer = null;
   gear.addEventListener('touchstart', function(){
     gearTimer = setTimeout(function(){ aecPanel.classList.add('show'); }, 800);
   }, {passive:true});
   gear.addEventListener('touchend', function(){ clearTimeout(gearTimer); }, {passive:true});
+  gear.addEventListener('dblclick', function(){
+    clearTimeout(gearTimer);
+    aecPanel.classList.add('show');
+  });
+  // 桌面端鼠标双击
+  gear.addEventListener('click', function(e){
+    if (e.detail >= 2){ clearTimeout(gearTimer); aecPanel.classList.add('show'); }
+  });
 
   // ---------------- 状态刷新 ----------------
   setInterval(function(){
