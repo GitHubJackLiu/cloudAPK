@@ -64,22 +64,21 @@ public class XzSession {
     private long seq = 0;
 
     /*
-     * 本地静音检测（VAD）。
+     * 本地静音检测（VAD）—— 默认关闭。
      *
-     * 不自己判「说完了」的话，全靠服务端那边的 VAD：它要求静音满 700ms~1s
-     * 才认一句话结束，用户体感就是「我说完它愣一下才回」。
-     * 客户端检测到静音后补一条 listen/detect，服务端可以直接进入识别，
-     * 这一段延迟就省掉了。
+     * 这段是 11-27 上午为了「说完别愣一下」加的：客户端自己判静音，
+     * 补一条 listen/detect 让服务端提前收尾识别。
      *
-     * 注意：这条 detect 的代价比看上去大得多。服务端收到它就直接收尾并发起
-     * 一次识别，如果本地 VAD 是被环境噪声/喇叭余音误触发的，就会把一段噪声
-     * 当成人说话送上去 —— 服务端的 ASR 对噪声的典型输出正是「小智」两个字，
-     * 于是小智被反复唤醒、自问自答。所以这里的判据必须严格：
-     *   1) 门限抬到 -20 dBFS，环境噪声基本到不了；
-     *   2) 必须连续 6 帧（≈360ms）超门限才算「真的在说话」，单次咔哒不算；
-     *   3) 起音前必须有 ≥240ms 安静段，排除 TTS 尾巴和渐弱噪声；
-     *   4) detect 冷却 4s，一轮对话最多补一次。
+     * 实测代价远大于收益：这条 detect 一发，服务端立刻结束当前轮并识别，
+     * 而麦克风在安静房间里也能被功放余音、风扇、空调噪声触发（实测
+     * 起音峰值 4700+，持续 360ms 以上才算数，照样被环境声命中）。
+     * 服务端的 ASR 对这类噪声的典型输出就是「小智」两个字，
+     * 于是变成「小智——我在呢」无限自问自答。
+     *
+     * 结论：关掉，交回服务端 VAD。代价只是说完多等 300~400ms，
+     * 比机器自己跟自己聊天好得多。要重新启用就把下面改成 true。
      */
+    private static final boolean VAD_DETECT_ENABLED = false;
     private static final int VAD_ON_PEAK = 3000;        // 约 -20.7 dBFS
     private static final int VAD_VOICE_FRAMES = 6;      // 连续超门限帧数（帧长 60ms）
     private static final long VAD_SILENCE_MS = 700;
@@ -721,8 +720,9 @@ public class XzSession {
         }
     }
 
-    /** 本地静音检测：说话结束后补一条 detect，让服务端立刻开始识别 */
+    /** 本地静音检测：说话结束后补一条 detect，让服务端立刻开始识别（默认关闭） */
     private void vadTrack(byte[] data, int len) {
+        if (!VAD_DETECT_ENABLED) return;
         int mx = 0;
         for (int i = 0; i + 1 < len; i += 2) {
             int v = (data[i] & 0xff) | (data[i + 1] << 8);
