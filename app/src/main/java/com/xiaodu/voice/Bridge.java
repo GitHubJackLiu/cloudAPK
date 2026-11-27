@@ -198,8 +198,8 @@ public class Bridge {
                 JSONObject o = new JSONObject();
                 try {
                     o.put("name", r.name);
-                    o.put("refDb", r.refDb);
-                    o.put("echoDb", r.echoDb);
+                    o.put("floorDb", r.floorDb);
+                    o.put("toneDb", r.toneDb);
                     o.put("erle", r.erle);
                     o.put("note", r.note == null ? "" : r.note);
                 } catch (Exception ignored) { }

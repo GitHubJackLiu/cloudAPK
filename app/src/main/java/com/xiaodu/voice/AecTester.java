@@ -18,16 +18,19 @@ import java.util.List;
  * AudioALSACaptureHandlerAEC / AudioALSACaptureDataProviderEchoRef）。
  * 要用它，必须让采集与播放同时处在 VOICE_COMMUNICATION 通路。
  *
- * 测法（与此前浏览器 aec3.html 保持一致，便于对比）：
- *   1) 放一段 1kHz 正弦（远场模拟「小智在说话」）
- *   2) 同期采集
- *   3) 用 Goertzel 取采集信号的 1kHz 分量幅度 = 残余回声
- *   4) ERLE = 参考电平 - 残余电平（dB）
- *      参考电平 = 同样音量下、AEC 不介入时的 1kHz 分量
+ * 测量方法（重要）：
+ *   跨通路比较绝对电平是不可靠的 —— 不同 input source 有不同的增益与 AGC，
+ *   实测 VOICE_COMMUNICATION 通路的底噪比 MIC 通路高 30 dB。
+ *   所以改成【组内自比】：
+ *     · 播放 1kHz 测试音时采到的 1kHz 分量 = 「有声电平」
+ *     · 静默时采到的 1kHz 分量      = 「无电平」（本底）
+ *     · ERLE = 有声电平 − 无声电平
+ *   同一条通路内部前后对比，增益差异被消掉，剩下的就是 AEC 的抑制量。
+ *   数值越大说明回声被压得越干净。
  *
  * 通路矩阵：
- *   A. MIC      + MEDIA      + NORMAL   （= 此前浏览器等效通路，预期 ERLE≈0）
- *   B. MIC      + VOICE_COMM + COMM
+ *   A. MIC        + MEDIA      + NORMAL   （= 此前浏览器等效通路，预期 ERLE≈0）
+ *   B. MIC        + VOICE_COMM + COMM
  *   C. VOICE_COMM + VOICE_COMM + NORMAL
  *   D. VOICE_COMM + VOICE_COMM + COMM     （= 目标：DSP Speech AEC 全开）
  */
@@ -36,14 +39,14 @@ public class AecTester {
     private static final String TAG = "XzAec";
     private static final int TONE_HZ = 1000;
     private static final int TONE_MS = 2000;
-    private static final int TONE_AMP = 8000;   // 约 -12 dBFS，留足余量避免削顶
+    private static final int TONE_AMP = 12000;   // 约 -8.7 dBFS，留足余量避免削顶
 
     public static class Result {
         public String name;
         public int src, usage, mode;
-        public double refDb;      // AEC 不介入时的 1kHz 参考电平
-        public double echoDb;     // 残余回声电平
-        public double erle;
+        public double floorDb;      // 静默时 1kHz 分量（dBFS）
+        public double toneDb;       // 放测试音时 1kHz 分量（dBFS）
+        public double erle;         // toneDb - floorDb
         public String note;
     }
 
@@ -58,39 +61,34 @@ public class AecTester {
 
     public void cancel() { cancel = true; }
 
-    /** 跑完整矩阵，返回每一项的结果 */
+    /** 跑完整矩阵 */
     public List<Result> runMatrix(final ProgressCb cb) {
         List<Result> out = new ArrayList<>();
-        // 参考基线：MIC 采集 + MEDIA 播放 + NORMAL —— 此通路没有 AEC，
-        // 采到的就是「未消除的回声」，作为 ERLE 的参考电平。
-        Result ref = runCase("A · MIC+MEDIA+NORMAL（基线·无AEC）",
-                AudioEngine.SRC_MIC, AudioEngine.USE_MEDIA,
-                AudioEngine.MODE_NORMAL, null, cb);
-        out.add(ref);
-
         String[][] cases = {
-                {"B · MIC+VOICECOMM+COMM", "mic_comm"},
-                {"C · VOICECOMM+VOICECOMM+NORMAL", "vc_normal"},
-                {"D · VOICECOMM+VOICECOMM+COMM（目标）", "vc_comm"},
+                {"A · MIC+MEDIA+NORMAL（基线·等效浏览器通路）", "null"},
+                {"B · MIC+VOICECOMM+COMM", "null"},
+                {"C · VOICECOMM+VOICECOMM+NORMAL", "null"},
+                {"D · VOICECOMM+VOICECOMM+COMM（目标）", "null"},
         };
-        int[] srcs = {AudioEngine.SRC_MIC, AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_COMM};
-        int[] uses = {AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM};
-        int[] modes = {AudioEngine.MODE_COMM, AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM};
+        int[] srcs = {AudioEngine.SRC_MIC, AudioEngine.SRC_MIC,
+                AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_COMM};
+        int[] uses = {AudioEngine.USE_MEDIA, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM};
+        int[] modes = {AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM,
+                AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM};
 
         for (int i = 0; i < cases.length; i++) {
             if (cancel) break;
-            Result r = runCase(cases[i][0], srcs[i], uses[i], modes[i], ref, cb);
+            Result r = runCase(cases[i][0], srcs[i], uses[i], modes[i], cb);
             out.add(r);
         }
         return out;
     }
 
     /**
-     * 跑单个通路组合。
-     * ref 非空时用它当 ERLE 参考；为 null 则本次结果只作为参考基线。
+     * 跑单个通路组合，组内自比测 ERLE。
      */
-    private Result runCase(String name, int src, int usage, int mode,
-                           Result ref, ProgressCb cb) {
+    private Result runCase(String name, int src, int usage, int mode, ProgressCb cb) {
         Result r = new Result();
         r.name = name;
         r.src = src;
@@ -98,7 +96,6 @@ public class AecTester {
         r.mode = mode;
 
         try {
-            // 先建立通路（HAL 需要时间切到 speech 通路并建立 echo reference）
             engine.setPath(src, usage, mode);
             // 独占采集：readLoop 必须让开，否则会瓜分 captureToneLevel 读到的数据
             engine.setExclusive(true);
@@ -111,44 +108,47 @@ public class AecTester {
                 return r;
             }
             try {
-                Thread.sleep(1200);   // 等通路稳定
+                Thread.sleep(1500);   // 等 HAL 切到 speech 通路并建立 echo reference
 
-                // 采一段「无人说话」的底噪，确认通路确实在工作
-                double floor = engine.captureToneLevel(600, TONE_HZ);
-                r.note = "底噪 " + String.format("%.1f", floor) + " dBFS";
+                // ---- ① 无声本底：连续采两段，确认通路确实在工作 ----
+                double f1 = engine.captureToneLevel(700, TONE_HZ);
+                double f2 = engine.captureToneLevel(700, TONE_HZ);
+                r.floorDb = Math.min(f1, f2);   // 取更安静的一段做本底
 
-                // 放 1kHz，同期采集残余回声
-                // 采集线程与放音并发：captureToneLevel 读的是 record，
-                // 播放在另一个线程进行，用 sleep 对齐。
+                // ---- ② 放 1kHz，同期采集残余回声 ----
+                // 采集在主测试线程，播放在独立线程并发进行
                 final double[] echo = new double[1];
-                Thread player = new Thread(() -> engine.playTone(TONE_HZ, TONE_MS, TONE_AMP));
+                Thread player = new Thread(new Runnable() {
+                    public void run() { engine.playTone(TONE_HZ, TONE_MS, TONE_AMP); }
+                });
                 player.start();
-                Thread.sleep(300);                    // 等播放真正开始
-                echo[0] = engine.captureToneLevel(TONE_MS - 600, TONE_HZ);
-                player.join(4000);
+                Thread.sleep(350);                       // 等播放真正开始
+                echo[0] = engine.captureToneLevel(TONE_MS - 700, TONE_HZ);
+                player.join(5000);
 
-                r.echoDb = echo[0];
-                if (ref != null) {
-                    r.refDb = ref.refDb;
-                    r.erle = ref.refDb - r.echoDb;
+                r.toneDb = echo[0];
+                r.erle = r.toneDb - r.floorDb;
+
+                // 若有声电平不高于本底，说明根本没采到测试音（播放失败或麦克风没在工作）
+                if (r.erle < 3) {
+                    r.note = "有声电平未高于本底 → " +
+                            (r.toneDb > r.floorDb ? "回声极弱" : "未采到测试音，播放可能失败");
                 } else {
-                    // 基线自身：ref = 自己的残余回声
-                    r.refDb = r.echoDb;
-                    r.erle = 0;
+                    r.note = String.format("本底 %.1f → 有声 %.1f dBFS", r.floorDb, r.toneDb);
                 }
             } finally {
                 engine.stop();
                 engine.setExclusive(false);
                 engine.setCaptureOnly(false);
-                Thread.sleep(400);
+                Thread.sleep(500);
             }
         } catch (Throwable t) {
             Log.e(TAG, "case failed", t);
             r.note = "异常 " + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
         if (cb != null) cb.onProgress(name, r);
-        Log.i(TAG, String.format("%s | ref=%.1f echo=%.1f ERLE=%.1f | %s",
-                name, r.refDb, r.echoDb, r.erle, r.note == null ? "" : r.note));
+        Log.i(TAG, String.format("%s | floor=%.1f tone=%.1f ERLE=%.1f | %s",
+                name, r.floorDb, r.toneDb, r.erle, r.note == null ? "" : r.note));
         return r;
     }
 

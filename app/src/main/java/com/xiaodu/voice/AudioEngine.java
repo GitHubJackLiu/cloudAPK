@@ -287,8 +287,12 @@ public class AudioEngine {
     /**
      * 播放一段 PCM 测试音（用于 AEC 通路对比实验）。
      * toneHz=1000, ms=2000 生成标准 1kHz 正弦，幅度固定，便于用 Goertzel 量化残余回声。
+     *
+     * 注意：AudioTrack 没有 wait(long) 方法（那是 Object 的监视器方法，
+     * 未加锁调用会抛 IllegalMonitorStateException），这里用 sleep 等待。
      */
     public void playTone(int toneHz, int ms, int amplitude) {
+        AudioTrack t = null;
         try {
             int total = SR_UP * ms / 1000;
             byte[] pcm = new byte[total * 2];
@@ -297,7 +301,7 @@ public class AudioEngine {
                 pcm[i * 2] = (byte) (v & 0xff);
                 pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
             }
-            AudioTrack t = new AudioTrack(
+            t = new AudioTrack(
                     new AudioAttributes.Builder()
                             .setUsage(playUsage)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -309,13 +313,22 @@ public class AudioEngine {
                             .build(),
                     Math.max(pcm.length, FRAME_BYTES * 8),
                     AudioTrack.MODE_STATIC, AudioManager.AUDIO_SESSION_ID_GENERATE);
+            if (t.getState() != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "playTone: track not initialized");
+                return;
+            }
             t.write(pcm, 0, pcm.length);
             t.play();
-            t.wait(pcm.length / 2L / SR_UP * 1000L + 200);
-            t.stop();
-            t.release();
-        } catch (Throwable t) {
-            Log.e(TAG, "playTone failed", t);
+            // 等播放走完（静态 track 的长度已知）
+            long waitMs = (long) pcm.length / 2L / SR_UP * 1000L + 300;
+            Thread.sleep(waitMs);
+        } catch (Throwable e) {
+            Log.e(TAG, "playTone failed", e);
+        } finally {
+            if (t != null) {
+                try { t.stop(); } catch (Throwable ignored) { }
+                try { t.release(); } catch (Throwable ignored) { }
+            }
         }
     }
 

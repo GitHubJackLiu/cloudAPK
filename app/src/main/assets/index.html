@@ -153,7 +153,8 @@
   </div>
   <div class="note" style="margin-bottom:8px;text-align:left">
     验证原生 VOICE_COMMUNICATION 能否启用 MTK DSP 的硬件 AEC。<br>
-    ERLE = 参考电平 − 残余回声电平；越大越好，&lt;5dB 视为无效。
+    ERLE = 有测试音时的 1kHz 分量 − 静默本底（组内自比，消掉增益差异）。<br>
+    数值越大说明回声被压得越干净；&lt;5dB 视为无效。
   </div>
   <div id="aecOut" style="flex:1;overflow:auto"></div>
 </div>
@@ -382,12 +383,12 @@
     var erle = p.erle;
     var cls = 'aresult';
     if (typeof erle === 'number'){
-      if (erle >= 10) cls += ' good';
+      if (erle >= 15) cls += ' good';
       else if (erle < 5) cls += ' bad';
     }
     d.className = cls;
     var txt = '<b>' + (p.name||'') + '</b><br>';
-    txt += '参考 ' + num(p.refDb) + ' dBFS · 残余 ' + num(p.echoDb) + ' dBFS';
+    txt += '本底 ' + num(p.floorDb) + ' dBFS · 有声 ' + num(p.toneDb) + ' dBFS';
     if (typeof erle === 'number') txt += ' · <b>ERLE ' + erle.toFixed(1) + ' dB</b>';
     if (p.note) txt += '<br>' + p.note;
     d.innerHTML = txt;
