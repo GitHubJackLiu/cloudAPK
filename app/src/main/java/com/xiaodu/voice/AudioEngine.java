@@ -242,7 +242,8 @@ public class AudioEngine {
         int minBuf = AudioRecord.getMinBufferSize(
                 SR_UP, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBuf <= 0) minBuf = FRAME_BYTES * 4;
-        int bufSize = Math.max(minBuf, FRAME_BYTES * 8);
+        // 采集缓冲 4 帧：读线程被短暂抢占时不至于溢出，又不至于攒出延迟
+        int bufSize = Math.max(minBuf, FRAME_BYTES * 4);
 
         try {
             record = new AudioRecord(captureSource, SR_UP,
@@ -270,9 +271,12 @@ public class AudioEngine {
 
     /** 开下行播放 */
     private boolean openTrack() {
-        int outBuf = Math.max(FRAME_BYTES * 8,
-                AudioTrack.getMinBufferSize(SR_UP, AudioFormat.CHANNEL_OUT_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT));
+        // 3 帧 = 180ms。原来给 8 帧（480ms），等于 TTS 永远比文字慢半秒；
+        // 缓冲太小又会 underrun，3 帧是这台机器上延迟与稳定性的平衡点。
+        int outMin = AudioTrack.getMinBufferSize(SR_UP, AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT);
+        if (outMin <= 0) outMin = FRAME_BYTES * 2;
+        int outBuf = Math.max(outMin, FRAME_BYTES * 3);
         AudioAttributes attrs = new AudioAttributes.Builder()
                 .setUsage(playUsage)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -364,6 +368,9 @@ public class AudioEngine {
 
     /** 上行采集循环 */
     private void readLoop() {
+        // Thread.setPriority 只改 Java 层权重，真正决定 Nice 值的是这个
+        try { android.os.Process.setThreadPriority(
+                android.os.Process.THREAD_PRIORITY_URGENT_AUDIO); } catch (Throwable ignored) { }
         byte[] buf = new byte[FRAME_BYTES];
         while (running) {
             AudioRecord r = record;
@@ -399,6 +406,8 @@ public class AudioEngine {
 
     /** 下行播放循环 */
     private void writeLoop() {
+        try { android.os.Process.setThreadPriority(
+                android.os.Process.THREAD_PRIORITY_URGENT_AUDIO); } catch (Throwable ignored) { }
         while (running) {
             try {
                 PcmSource s = source;

@@ -389,6 +389,18 @@ public class Bridge {
         }, 1500);
     }
 
+    /**
+     * 采集电平（0~100）。
+     *
+     * 单独开一个返回 int 的接口：电平条要按 4Hz 刷新，走 getAudioPath() 的话
+     * 每次都要在原生侧拼 JSON、再到 JS 侧 JSON.parse，同步穿越两次，
+     * 低端机上一次十几毫秒，界面跟着发涩。
+     */
+    @JavascriptInterface
+    public int getLevel() {
+        return audio.getLevel();
+    }
+
     /** 当前音频通路参数，供网页显示 */
     @JavascriptInterface
     public String getAudioPath() {

@@ -55,6 +55,10 @@ public class XzSession {
     private DatagramSocket udp;
     private String udpServer;
     private int udpPort;
+    /** 握手后解析一次就缓存：原来每帧都 InetAddress.getByName()，
+     *  内部要走一次 DNS 缓存查找（还可能真的发查询），60ms 一帧的高频路径上
+     *  这笔开销直接卡在采集线程里。 */
+    private volatile InetAddress udpAddr;
     private byte[] aesKey = new byte[16];
     private String nonceHex = "";
     private long seq = 0;
@@ -65,6 +69,16 @@ public class XzSession {
     private final java.util.concurrent.LinkedBlockingQueue<byte[]> downQ =
             new java.util.concurrent.LinkedBlockingQueue<>(64);
 
+    /**
+     * 上行 PCM 队列（采集线程 → 编码发送线程）。
+     *
+     * 编 Opus + AES + send 加起来在 MT8167 上要 5~15ms，原来全压在采集线程里，
+     * 等于每 60ms 卡一次 read()，AudioRecord 的缓冲被顶到溢出，上行延迟越来越大。
+     * 现在采集只做帧对齐和入队，重活交给独立线程。
+     */
+    private final java.util.concurrent.LinkedBlockingQueue<byte[]> upQ =
+            new java.util.concurrent.LinkedBlockingQueue<>(8);
+
     public XzSession(MainActivity act, Settings settings, AudioEngine audio) {
         this.act = act;
         this.settings = settings;
@@ -72,7 +86,7 @@ public class XzSession {
         audio.setSink(this::onMicPcm);
         audio.setSource(() -> {
             try {
-                return downQ.poll(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+                return downQ.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 return null;
             }
@@ -135,6 +149,8 @@ public class XzSession {
             }
         } catch (Throwable ignored) { }
         downQ.clear();
+        upQ.clear();
+        udpAddr = null;
         try { audio.stop(); } catch (Throwable ignored) { }
         paused = false;
         armed = false;
@@ -218,8 +234,14 @@ public class XzSession {
 
             // UDP 音频面
             udp = new DatagramSocket();
+            try {
+                udpAddr = InetAddress.getByName(udpServer);
+            } catch (Throwable t) {
+                fail("音频服务器地址解析失败: " + udpServer);
+                return;
+            }
             new Thread(this::udpRx, "xz-udp-rx").start();
-            new Thread(this::dbgLoop, "xz-dbg").start();
+            new Thread(this::upTxLoop, "xz-udp-tx").start();
 
             // 采集
             if (!audio.start()) {
@@ -393,9 +415,14 @@ public class XzSession {
         try {
             JSONObject m = new JSONObject(payload);
             String t = m.optString("type");
-            // 诊断：把服务端原始报文打出来（截断），排查字段名/取值问题
-            Log.i(TAG, "rx<" + t + "> " + (payload.length() > 400
-                    ? payload.substring(0, 400) + "…" : payload));
+            // 报文日志截到 160 字符：TTS 全文能有好几 KB，
+            // 每条都拼字符串 + 写 logd，在采集/播放抢 CPU 时是实打实的干扰
+            if (payload.length() > 160) {
+                Log.i(TAG, "rx<" + t + "> " + payload.substring(0, 160) + "…("
+                        + payload.length() + "B)");
+            } else {
+                Log.i(TAG, "rx<" + t + "> " + payload);
+            }
             if ("hello".equals(t)) {
                 JSONObject udpObj = m.optJSONObject("udp");
                 if (udpObj != null) {
@@ -553,24 +580,6 @@ public class XzSession {
     }
 
     /** 每 2 秒把链路各段计数打一遍，定位「包到没到/解码成不成/写没写进去」 */
-    private void dbgLoop() {
-        int prevOk = -1;
-        while (running.get()) {
-            try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
-            if (!running.get()) break;
-            // 空闲时不刷日志，只在计数变化时打，避免把 logcat 淹掉
-            if (rxOk == prevOk) continue;
-            prevOk = rxOk;
-            Log.i(TAG, "dbg udp=" + rxTotal + " dropType=" + rxCandDrop
-                    + "/" + rxBadType + " badLen=" + rxBadLen + " dup=" + rxSeqDrop
-                    + " decNull=" + rxDecNull + " opNull=" + rxOpNull
-                    + " ok=" + rxOk + " err=" + rxErr + " seq=" + lastSeqSeen
-                    + " q=" + downQ.size() + " wrBlk=" + audio.getWrittenBlocks()
-                    + " wrKB=" + (audio.getWrittenBytes() / 1024)
-                    + " lastN=" + OpusCodec.lastSamples);
-        }
-    }
-
     /**
      * 小智 UDP 音频包 nonce（必须凑满 16 字节，AES-CTR 的 IV 长度是硬要求）：
      *   前 2B  = nonce_hex[0:4]
@@ -644,23 +653,44 @@ public class XzSession {
         }
         try {
             int off = 0;
+            int frameBytes = XZ_UP_SAMPLES * 2;
             while (off < len) {
                 int room = upBuf.length - upFill;
                 int n = Math.min(room, len - off);
                 System.arraycopy(data, off, upBuf, upFill, n);
                 upFill += n;
                 off += n;
-                if (upFill >= XZ_UP_SAMPLES * 2) {
-                    sendUpstream(upBuf, XZ_UP_SAMPLES * 2);
+                if (upFill >= frameBytes) {
+                    // upBuf 是复用的，入队必须复制一份
+                    byte[] frame = new byte[frameBytes];
+                    System.arraycopy(upBuf, 0, frame, 0, frameBytes);
+                    // 队列满说明下游编码跟不上：丢最老的，保证永远是当前声音
+                    if (!upQ.offer(frame)) { upQ.poll(); upQ.offer(frame); }
                     // 帧长固定，剩余不足一帧的留到下次
-                    upFill -= XZ_UP_SAMPLES * 2;
+                    upFill -= frameBytes;
                     if (upFill > 0) {
-                        System.arraycopy(upBuf, XZ_UP_SAMPLES * 2, upBuf, 0, upFill);
+                        System.arraycopy(upBuf, frameBytes, upBuf, 0, upFill);
                     }
                 }
             }
         } catch (Throwable t) {
             Log.w(TAG, "onMicPcm: " + t);
+        }
+    }
+
+    /** 上行编码发送线程（与采集解耦） */
+    private void upTxLoop() {
+        while (running.get()) {
+            try {
+                byte[] pcm = upQ.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (pcm == null) continue;
+                sendUpstream(pcm, pcm.length);
+            } catch (InterruptedException e) {
+                break;
+            } catch (Throwable t) {
+                if (!running.get()) break;
+                Log.w(TAG, "upTx: " + t);
+            }
         }
     }
 
@@ -689,8 +719,9 @@ public class XzSession {
         // ssrc(4) ts(4) 保持 0，服务端不校验
         System.arraycopy(nonce, 0, packet, 0, 16);
         System.arraycopy(body, 0, packet, 16, body.length);
-        udp.send(new DatagramPacket(packet, packet.length,
-                InetAddress.getByName(udpServer), udpPort));
+        InetAddress addr = udpAddr;
+        if (addr == null) return;
+        udp.send(new DatagramPacket(packet, packet.length, addr, udpPort));
         upCount++;
     }
 

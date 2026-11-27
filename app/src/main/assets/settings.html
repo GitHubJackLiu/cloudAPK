@@ -337,7 +337,19 @@
   $('wakeLock').onclick = function(){ wake = !wake; paintWake(); };
   $('showDebug').onclick = function(){ showDbg = !showDbg; paintDbg(); };
 
-  $('back').onclick = function(){ location.href = 'index.html'; };
+  // 在 index.html 的 iframe 里时，返回只是把浮层收起来；
+  // 直接被当顶层页打开（老入口 / 调试）时才走跳转
+  function goHome(){
+    if (window.parent && window.parent !== window){
+      // file:// 下每个文件是独立 opaque origin，直接调 parent 的函数可能被
+      // SecurityError 挡掉；postMessage 不受同源限制，作为主通路。
+      try { window.parent.postMessage('xz-close-shell', '*'); } catch(e){}
+      try { if (window.parent.closeShell) window.parent.closeShell(); } catch(e){}
+    } else {
+      location.href = 'index.html';
+    }
+  }
+  $('back').onclick = goHome;
 
   // -------- 网络信息 --------
   function loadNet(){
@@ -424,7 +436,7 @@
       try {
         window.Native.saveSettings(JSON.stringify(body));
         toast('已保存');
-        setTimeout(function(){ location.href='index.html'; }, 600);
+        setTimeout(goHome, 400);
       } catch(e){ toast('保存失败'); }
       return;
     }
