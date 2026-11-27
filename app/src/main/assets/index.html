@@ -48,7 +48,9 @@
      以前只有一个左列，我自己的识别结果也挤在头像左边，看起来像别人说的话。
      右列从 top:72 起，避开右上角齿轮（y 14~60）；max-height 47%≈264px，
      下沿约 336px，远高于右下角通话按钮（上沿约 412px），不会叠在一起。 */
-  .talk{position:absolute;width:min(304px,32vw);max-height:47%;
+  /* 气泡列收窄到 248px：脸放大到 404px 后左右边缘在 x=277/681，
+     容器从 x=20 起宽 248 → 右边缘 268，离脸留 9px 间隙，不再压住表情。 */
+  .talk{position:absolute;width:min(248px,26vw);max-height:47%;
     overflow-y:auto;overflow-x:hidden;padding:2px 2px 4px;z-index:6;
     display:flex;flex-direction:column;gap:9px;
     scrollbar-width:none}
@@ -70,12 +72,15 @@
      SVG 渲染下建动画是同步的，不留空脸窗口；少一层就少一份合成开销。 */
   #lottieBox{width:100%;height:100%}
   #lottieBox svg,#lottieBox canvas{width:100%!important;height:100%!important;display:block}
-  .avatar::after{content:"";position:absolute;top:-12px;right:-12px;bottom:-12px;left:-12px;border-radius:50%;
-    border:3px solid rgba(90,212,139,.7);opacity:0;pointer-events:none}
+  /* 光晕整体加倍：边框 3px→6px、外扩 12px→24px、静态光晕 48px/.28→96px/.56，
+     扩散终点 scale 1.18→1.36（幅度翻倍）。opacity 起点本来就是 .7，翻倍会
+     超过 1 被截到 1，所以起点保持 .7 不变。 */
+  .avatar::after{content:"";position:absolute;top:-24px;right:-24px;bottom:-24px;left:-24px;border-radius:50%;
+    border:6px solid rgba(90,212,139,.7);opacity:0;pointer-events:none}
   .stage.speaking .avatar::after{animation:halo 1.4s ease-out infinite}
   .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 20px 60px rgba(0,0,0,.6),
-               0 0 48px rgba(90,212,139,.28)}
-  @keyframes halo{0%{transform:scale(.94);opacity:.7}100%{transform:scale(1.18);opacity:0}}
+               0 0 96px rgba(90,212,139,.56)}
+  @keyframes halo{0%{transform:scale(.94);opacity:.7}100%{transform:scale(1.36);opacity:0}}
 
   /* 按钮改为右下角悬浮：不再占竖直空间，脸才可能长到 404px */
   .callwrap{position:absolute;right:46px;bottom:54px;z-index:7;
