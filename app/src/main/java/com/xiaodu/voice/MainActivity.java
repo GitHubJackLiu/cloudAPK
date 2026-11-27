@@ -300,6 +300,27 @@ public class MainActivity extends Activity {
         startActivity(i);
     }
 
+    /**
+     * 返回键优先收起设置浮层，不做退出。
+     *
+     * 这台设备是常驻终端，误触返回直接退到桌面很难受；
+     * 设置页的锁屏也必须有办法退出来（原来只能输对密码）。
+     */
+    @Override
+    public void onBackPressed() {
+        if (webView == null) { super.onBackPressed(); return; }
+        webView.evaluateJavascript(
+                "(function(){var s=document.getElementById('shell');" +
+                "if(s&&s.classList.contains('on')){s.classList.remove('on');return '1';}" +
+                "return '0';})()",
+                value -> {
+                    if (value == null || !value.contains("1")) {
+                        // 浮层本来就没开，再按返回才退到桌面
+                        goHome();
+                    }
+                });
+    }
+
     public void openSystem(String target) {
         // 用全限定名：本包的 Settings 类会遮蔽 android.provider.Settings
         String action;

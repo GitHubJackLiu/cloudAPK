@@ -87,6 +87,11 @@
   #lock{position:fixed;top:0;right:0;bottom:0;left:0;z-index:200;display:flex;align-items:center;justify-content:center;
     background:#0b0e14;padding:20px}
   #lock.hide{display:none}
+  /* 锁屏也要能退出去：原来只能输对密码，输不出/不想进就卡在这一页，
+     系统返回键又会直接把 App 退掉。 */
+  .lockback{position:absolute;top:20px;left:22px;padding:9px 16px;border-radius:12px;
+    border:1px solid rgba(45,54,72,.9);background:rgba(18,22,31,.9);
+    color:#9aa3b5;font-size:14px}
   .lockcard{width:100%;max-width:360px;text-align:center}
   .lockttl{font-size:21px;font-weight:600;color:#e6e9ef}
   .locksub{margin-top:8px;font-size:15px;color:#8d96aa}
@@ -195,6 +200,7 @@
 </div>
 
 <div id="lock">
+  <button class="lockback" id="lockBack">← 返回</button>
   <div class="lockcard">
     <div class="lockttl">输入密码</div>
     <div class="locksub">6 位数字密码，进入设置</div>
@@ -349,6 +355,7 @@
     }
   }
   $('back').onclick = goHome;
+  $('lockBack').onclick = goHome;
 
   // -------- 网络信息 --------
   function loadNet(){
