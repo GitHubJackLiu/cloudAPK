@@ -362,10 +362,13 @@
         done = true;
         if (seq !== emoLoad){ try { anim.destroy(); } catch(e){} return; }
         try { anim.resize(); } catch(e){}
+        // 先把第 0 帧实实在在画进 canvas 再交给它自己播。个别表情在 rAF
+        // 被拖住时首帧迟迟不上屏，看起来就是「偶尔脸不见了」。
+        try { anim.goToAndStop(0, true); } catch(e){}
         boxIdx = idx;
         emoAnim = anim;
         box.style.opacity = '1';
-        if (facePaused){ try { anim.pause(); } catch(e){} }
+        try { facePaused ? anim.pause() : anim.play(); } catch(e){}
         // 旧层先暂停（省 CPU）再淡出；若这段时间又切回来了就别动它
         var oldBox = boxes[prevIdx], oldAnim = layerAnim[prevIdx];
         if (oldAnim && oldAnim !== anim){ try { oldAnim.pause(); } catch(e){} }
@@ -424,12 +427,12 @@
       btn.disabled = false;
       btn.setAttribute('aria-label', '挂断');
       callLabel.textContent = '通话中 · 点击挂断';
-    } else if (st === 'connecting'){
+    } else if (st === 'connecting' || st === 'stopping'){
       btn.className = 'round busy';
       btn.innerHTML = ICON_SPIN;
       btn.disabled = true;
-      btn.setAttribute('aria-label', '正在连接');
-      callLabel.textContent = '正在连接…';
+      btn.setAttribute('aria-label', st === 'stopping' ? '正在挂断' : '正在连接');
+      callLabel.textContent = st === 'stopping' ? '正在挂断…' : '正在连接…';
     } else {
       btn.className = 'round';
       btn.innerHTML = ICON_CALL;
@@ -518,6 +521,7 @@
     switch(type){
       case 'session':
         if (p.state === 'started'){
+          if (st === 'stopping') return;   // 挂断途中迟到的 started，别把按钮翻回去
           st = 'live';
           if (liveTimer){ clearTimeout(liveTimer); liveTimer = null; }
           paint();
@@ -575,9 +579,9 @@
         }
         break;
       case 'goodbye':
+        // 走统一的 stop()：先置 stopping，等原生真正清理完再放开按钮
+        stop();
         note('小智已挂断');
-        setIdle('待连接');
-        if (hasNative){ try { window.Native.stop(); } catch(e){} }
         break;
       case 'mode':
         if (S){ S.ui = S.ui || {}; S.ui.mode = p.mode; }
@@ -619,14 +623,23 @@
     }, 30000);
   }
   function stop(){
-    if (st === 'idle') return;
-    st = 'idle';
+    if (st === 'idle' || st === 'stopping') return;
+    st = 'stopping';
     if (liveTimer){ clearTimeout(liveTimer); liveTimer = null; }
     stage.classList.remove('speaking');
     paint();
-    setMode('待连接');
-    note('已挂断');
-    if (hasNative){ try { window.Native.stop(); } catch(e){} }
+    setMode('正在挂断', 'busy');
+    note('正在挂断…');
+    // 原生 stop 线程里要 join 采集/播放线程（最多 800ms），必须等它回
+    // session/stopped 才能放开按钮。否则立刻点「通话」会被原生 running
+    // 标志挡掉，界面却已经是绿色，看起来就是「挂断后再点没反应」。
+    liveTimer = setTimeout(function(){
+      if (st === 'stopping'){ setIdle('待连接'); note('已挂断'); }
+    }, 4000);
+    if (hasNative){
+      try { window.Native.stop(); }
+      catch(e){ setIdle('停止失败'); note('停止失败：' + e.message); }
+    }
   }
   btn.onclick = function(){ (st === 'live') ? stop() : start(); };
 

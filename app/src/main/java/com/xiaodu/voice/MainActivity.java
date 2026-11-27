@@ -287,9 +287,11 @@ public class MainActivity extends Activity {
     }
 
     public void stopSession() {
-        // cleanup() 里要 join 采集/播放线程（各最多 400ms），
-        // 放主线程会卡住按钮动画，挪到工作线程。
-        new Thread(session::stop, "xz-stop").start();
+        // 先同步把 running 抢下来，防止 stop 线程还没开跑时用户就又点了通话；
+        // cleanup() 里要 join 采集/播放线程（各最多 400ms），放工作线程做。
+        // 前端会等 session/stopped 事件才把按钮放开，所以 start 不会撞上 cleanup。
+        if (!session.beginStop()) return;
+        new Thread(session::finishStop, "xz-stop").start();
     }
 
     public void goHome() {

@@ -148,10 +148,26 @@ public class XzSession {
         new Thread(this::run, "xz-session").start();
     }
 
-    public void stop() {
-        if (!running.compareAndSet(true, false)) return;
+    /**
+     * 同步抢占 running 标志。必须由调用方在启动 stop 线程「之前」调用。
+     *
+     * 原来 stop() 整个丢到工作线程里，running 还是 true 的那几百毫秒内
+     * 用户再点「通话」，start() 的 compareAndSet(false,true) 直接失败，
+     * 而前端已经把按钮变回绿色 —— 表现就是「挂断后再点没反应」。
+     */
+    public boolean beginStop() {
+        return running.compareAndSet(true, false);
+    }
+
+    /** 真正释放资源；必须在 beginStop() 成功后调用，允许放在工作线程 */
+    public void finishStop() {
         cleanup();
         emit("session", "{\"state\":\"stopped\"}");
+    }
+
+    public void stop() {
+        if (!beginStop()) return;
+        finishStop();
     }
 
     /**
@@ -236,6 +252,7 @@ public class XzSession {
                 fail("MQTT 连接失败");
                 return;
             }
+            if (!running.get()) return;          // 连接途中被挂断，别再往下建音频面
 
             JSONObject hello = new JSONObject();
             hello.put("type", "hello");
@@ -275,6 +292,7 @@ public class XzSession {
             new Thread(this::upTxLoop, "xz-udp-tx").start();
 
             // 采集
+            if (!running.get()) return;          // 上面等 hello 的 12 秒里可能已被挂断
             if (!audio.start()) {
                 fail("音频启动失败");
                 return;
