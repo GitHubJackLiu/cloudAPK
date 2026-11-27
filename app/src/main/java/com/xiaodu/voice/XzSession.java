@@ -70,12 +70,29 @@ public class XzSession {
      * 才认一句话结束，用户体感就是「我说完它愣一下才回」。
      * 客户端检测到静音后补一条 listen/detect，服务端可以直接进入识别，
      * 这一段延迟就省掉了。
+     *
+     * 注意：这条 detect 的代价比看上去大得多。服务端收到它就直接收尾并发起
+     * 一次识别，如果本地 VAD 是被环境噪声/喇叭余音误触发的，就会把一段噪声
+     * 当成人说话送上去 —— 服务端的 ASR 对噪声的典型输出正是「小智」两个字，
+     * 于是小智被反复唤醒、自问自答。所以这里的判据必须严格：
+     *   1) 门限抬到 -20 dBFS，环境噪声基本到不了；
+     *   2) 必须连续 6 帧（≈360ms）超门限才算「真的在说话」，单次咔哒不算；
+     *   3) 起音前必须有 ≥240ms 安静段，排除 TTS 尾巴和渐弱噪声；
+     *   4) detect 冷却 4s，一轮对话最多补一次。
      */
-    private static final int VAD_ON_PEAK = 1200;        // 约 -29 dBFS
-    private static final long VAD_SILENCE_MS = 640;
+    private static final int VAD_ON_PEAK = 3000;        // 约 -20.7 dBFS
+    private static final int VAD_VOICE_FRAMES = 6;      // 连续超门限帧数（帧长 60ms）
+    private static final long VAD_SILENCE_MS = 700;
+    private static final long VAD_ONSET_QUIET_MS = 240;
+    private static final long VAD_COOLDOWN_MS = 4000;
+    private static final long VAD_AFTER_PAUSE_MS = 800; // TTS 结束后这段时间不判起音
     private boolean vadSpeaking = false;
+    private int vadVoiced = 0;
+    private long vadLastLoud = 0;
     private long vadLastVoice = 0;
     private long vadLastDetect = 0;
+    private long vadOnsetQuiet = 0;
+    private volatile long vadMuteUntil = 0;
 
     private volatile int upCount = 0;      // 已发送上行帧数（诊断用）
     private volatile int downCount = 0;    // 已收到下行帧数（诊断用）
@@ -475,6 +492,11 @@ public class XzSession {
                         try { Thread.sleep(half ? 300 : 150); } catch (InterruptedException ignored) { }
                         paused = false;
                         audio.setMuted(false);
+                        // 功放余音 + 房间反射还会持续一小会儿，这段时间别判起音，
+                        // 否则刚播完的那句话会被自己听回去当成新的一句。
+                        vadMuteUntil = System.currentTimeMillis() + VAD_AFTER_PAUSE_MS;
+                        vadSpeaking = false;
+                        vadVoiced = 0;
                         sendListen("start");
                     }).start();
                 }
@@ -668,6 +690,7 @@ public class XzSession {
             // 陈旧音频当成用户说话发上去。
             upFill = 0;
             vadSpeaking = false;
+            vadVoiced = 0;
             return;
         }
         try { vadTrack(data, len); } catch (Throwable ignored) { }
@@ -707,20 +730,39 @@ public class XzSession {
             if (v > mx) mx = v;
         }
         long now = System.currentTimeMillis();
-        if (mx > VAD_ON_PEAK) {
-            vadSpeaking = true;
-            vadLastVoice = now;
+        boolean loud = mx > VAD_ON_PEAK;
+
+        if (!loud) {
+            // 静音：响亮帧不连续了就重新计数
+            if (vadVoiced > 0 && now - vadLastLoud > 180) vadVoiced = 0;
+            if (!vadSpeaking) return;
+            if (now - vadLastVoice < VAD_SILENCE_MS) return;
+            vadSpeaking = false;
+            vadVoiced = 0;
+            // 冷却：服务端自己可能已经收尾了，别对着同一句话连发 detect
+            if (!running.get() || paused || !armed || mqtt == null) return;
+            if (now < vadMuteUntil) return;
+            if (now - vadLastDetect < VAD_COOLDOWN_MS) return;
+            vadLastDetect = now;
+            sendListen("detect", "");
+            Log.i(TAG, "vad detect (silence " + (now - vadLastVoice) + "ms peak=" + mx + ")");
             return;
         }
-        if (!vadSpeaking) return;
-        if (now - vadLastVoice < VAD_SILENCE_MS) return;
-        vadSpeaking = false;
-        // 冷却：服务端自己可能已经收尾了，别对着同一句话连发 detect
-        if (!running.get() || paused || !armed || mqtt == null) return;
-        if (now - vadLastDetect < 1200) return;
-        vadLastDetect = now;
-        sendListen("detect", "");
-        Log.i(TAG, "vad detect (silence " + (now - vadLastVoice) + "ms)");
+
+        // 响亮帧：只有「安静之后连续 6 帧超门限」才算真的开口
+        if (vadVoiced == 0) {
+            vadOnsetQuiet = (vadLastLoud == 0) ? Long.MAX_VALUE : (now - vadLastLoud);
+        }
+        vadVoiced++;
+        vadLastLoud = now;
+        if (!vadSpeaking && vadVoiced >= VAD_VOICE_FRAMES
+                && vadOnsetQuiet >= VAD_ONSET_QUIET_MS && now >= vadMuteUntil) {
+            vadSpeaking = true;
+            vadLastVoice = now;
+            Log.i(TAG, "vad onset peak=" + mx + " quiet=" + vadOnsetQuiet + "ms");
+            return;
+        }
+        if (vadSpeaking) vadLastVoice = now;
     }
 
     /** 上行编码发送线程（与采集解耦） */
