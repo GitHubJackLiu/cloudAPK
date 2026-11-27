@@ -423,7 +423,10 @@
       if (!r.ok){ $('updateState').textContent = '检查失败 ' + (r.err || r.status || ''); return; }
       if (r.hasUpdate){
         $('updateState').innerHTML = '有新版 <b>' + (r.tag || r.remoteCode) + '</b>';
-        toast('发现新版本，请到 Release 下载');
+        // 主页面才是弹框宿主（原生 emit 到不了 iframe），用 postMessage 转发。
+        // 先关设置浮层，再让主页面弹「发现新版本」框，点确认才下载安装。
+        try { parent.postMessage({type:'xz-update-found', data:r}, '*'); } catch(e){}
+        toast('发现新版本');
       } else if (r.reason === 'no_release'){
         $('updateState').textContent = '暂无发布版本';
       } else {

@@ -143,16 +143,15 @@ public class MainActivity extends Activity {
         scheduleAutoUpdateCheck();
     }
 
-    /** 启动 8 秒后后台检查一次更新；失败静默，绝不影响通话/表情预热。 */
+    /**
+     * 启动 8 秒后后台检查一次更新；失败静默，绝不影响通话/表情预热。
+     * 发现新版本时通过 bridge.emit("updateFound") 弹提示框（方案 C：
+     * 自动检查只提示，用户点确认才下载安装）。
+     */
     private void scheduleAutoUpdateCheck() {
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-            new Thread(() -> {
-                try {
-                    updater.check();
-                } catch (Throwable t) {
-                    Log.w(TAG, "auto update check failed: " + t);
-                }
-            }, "xz-update-check").start();
+            if (bridge == null) return;
+            bridge.updateCheck();
         }, 8000);
     }
 
@@ -475,9 +474,10 @@ public class MainActivity extends Activity {
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
             pendingCmd = "PANEL";
         } else if ("com.xiaodu.voice.UPDATE".equals(a)) {
-            // 手动触发更新检查（SSH/adb 自动化用），结果看 logcat tag XzUpdate
+            // 手动触发更新检查（SSH/adb 自动化用），结果看 logcat tag XzUpdate，
+            // 同时 emit 给页面（有更新就弹框）
             Log.i(TAG, "cmd: check update now");
-            new Thread(() -> updater.check(), "xz-update-cmd").start();
+            if (bridge != null) bridge.updateCheck();
             return;
         } else if ("com.xiaodu.voice.DEMO".equals(a)) {
             // 这台设备注入不了语音输入，验证两列气泡落位只能造假事件：

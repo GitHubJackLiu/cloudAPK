@@ -191,6 +191,35 @@ public class Bridge {
         return act.updater.check().toString();
     }
 
+    /**
+     * 异步检查更新（不阻塞 WebView 线程）：后台跑 check()，结果 emit 回页面。
+     * 主页面收到 updateFound 事件后弹提示框；设置页按钮也走这里，
+     * 这样原生只需 emit 到主 WebView 一次，不用跨 iframe 转发。
+     */
+    @JavascriptInterface
+    public void updateCheck() {
+        new Thread(() -> {
+            JSONObject r = act.updater.check();
+            boolean has = r.optBoolean("hasUpdate", false);
+            if (has) emit("updateFound", r.toString());
+            else emit("updateNone", r.toString());
+        }, "xz-upd-check").start();
+    }
+
+    /**
+     * 下载并安装更新（后台线程）。进度通过 updateProgress 事件回传，
+     * 结果通过 updateInstalled 事件回传。成功时 UpdateChecker 会拉起新版本。
+     */
+    @JavascriptInterface
+    public void updateInstall(String url, long size) {
+        new Thread(() -> {
+            JSONObject r = act.updater.downloadAndInstall(url, size, (pct, phase, msg) ->
+                    emit("updateProgress", "{\"pct\":" + pct + ",\"phase\":\"" + phase
+                            + "\",\"msg\":\"" + msg + "\"}"));
+            emit("updateInstalled", r.toString());
+        }, "xz-upd-install").start();
+    }
+
     /** 当前安装版本名（如 1.0），设置页显示用 */
     @JavascriptInterface
     public String getAppVersion() {

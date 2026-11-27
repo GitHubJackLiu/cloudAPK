@@ -155,6 +155,32 @@
   .aresult b{color:#e6e9ef}
   .aresult.good{border-color:#3fa96b;color:#8fe0b0}
   .aresult.bad{border-color:#8a3b3b;color:#f0a0a0}
+
+  /* ---------- 应用更新提示（检查到新版本时弹出） ---------- */
+  #upd{position:fixed;top:0;right:0;bottom:0;left:0;z-index:130;display:none;
+    background:rgba(8,11,17,.82);align-items:center;justify-content:center;padding:24px}
+  #upd.show{display:flex}
+  .updcard{width:100%;max-width:420px;padding:24px 22px 20px;border-radius:18px;
+    background:#141a26;border:1px solid #2a3550;box-shadow:0 18px 60px rgba(0,0,0,.6)}
+  .updbrand{font-size:11px;letter-spacing:.18em;color:#6b7690;text-transform:uppercase}
+  .updttl{margin-top:8px;font-size:18px;font-weight:600;color:#e6e9ef}
+  .updver{margin-top:12px;display:flex;align-items:baseline;gap:10px}
+  .updver .old{font-size:13px;color:#7d879c}
+  .updver .arrow{font-size:13px;color:#4c5567}
+  .updver .new{font-size:20px;font-weight:700;color:#5ad48b}
+  .updnote{margin-top:14px;font-size:13px;color:#9aa3b5;line-height:1.6}
+  .updbar{height:5px;border-radius:3px;background:#222b3b;overflow:hidden;
+    margin-top:16px;display:none}
+  .updbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3fa96b,#5ad48b);
+    transition:width .12s linear}
+  .updbar.on{display:block}
+  .updmsg{margin-top:8px;font-size:12px;color:#7d879c;min-height:16px;text-align:center}
+  .updbtns{margin-top:20px;display:flex;gap:10px}
+  .updbtn{flex:1;height:44px;border-radius:11px;border:1px solid #2a3550;
+    background:#1b2231;color:#c9d2e3;font-size:14px;font-weight:600;cursor:pointer}
+  .updbtn:active{opacity:.8}
+  .updbtn.go{background:#5ad48b;color:#0b0e14;border-color:#5ad48b;flex:1.4}
+  .updbtn[disabled]{opacity:.45;pointer-events:none}
 </style>
 </head>
 <body>
@@ -215,6 +241,25 @@
   <div id="aecOut" style="flex:1;overflow:auto"></div>
 </div>
 
+<div id="upd">
+  <div class="updcard">
+    <div class="updbrand">Software Update</div>
+    <div class="updttl">发现新版本</div>
+    <div class="updver">
+      <span class="old" id="updOld">v1.0</span>
+      <span class="arrow">→</span>
+      <span class="new" id="updNew">v1.1</span>
+    </div>
+    <div class="updnote">更新将自动下载并安装，完成后应用会重启。安装期间请勿断电。</div>
+    <div class="updbar" id="updBar"><i id="updBarIn"></i></div>
+    <div class="updmsg" id="updMsg"></div>
+    <div class="updbtns">
+      <button class="updbtn" id="updLater">稍后</button>
+      <button class="updbtn go" id="updGo">立即更新</button>
+    </div>
+  </div>
+</div>
+
 
 <script src="lottie.min.js"></script>
 <script>
@@ -225,7 +270,10 @@
       btn = $('btn'), gear = $('gear'), stage = $('stage'),
       act = $('act'), actCode = $('actCode'), actSub = $('actSub'),
       noteEl = $('note'), statusBox = $('statusBox'), callLabel = $('callLabel'),
-      aecPanel = $('aec'), aecOut = $('aecOut');
+      aecPanel = $('aec'), aecOut = $('aecOut'),
+      upd = $('upd'), updOld = $('updOld'), updNew = $('updNew'),
+      updBar = $('updBar'), updBarIn = $('updBarIn'), updMsg = $('updMsg'),
+      updLater = $('updLater'), updGo = $('updGo');
 
   // 挂断图标：听筒整体旋转 135°，viewBox 外扩 4px 防止旋转后被裁掉
   var ICON_CALL = '<svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>';
@@ -466,7 +514,13 @@
   };
   window.closeShell = function(){ shellOn(false); };
   window.addEventListener('message', function(e){
-    if (e && e.data === 'xz-close-shell') shellOn(false);
+    if (!e || !e.data) return;
+    if (e.data === 'xz-close-shell'){ shellOn(false); return; }
+    // 设置页检查到新版本：关浮层 + 弹更新框（原生 emit 到不了 iframe）
+    if (e.data.type === 'xz-update-found'){
+      shellOn(false);
+      showUpdate(e.data.data || {});
+    }
   });
   // 退到后台时 WebView 的 rAF 会停，但保险起见还是显式 pause 一下
   document.addEventListener('visibilitychange', function(){
@@ -558,7 +612,70 @@
         d2.innerHTML = '<b>矩阵完成</b>';
         aecOut.appendChild(d2);
         break;
+      case 'updateFound':
+        showUpdate(p);
+        break;
+      case 'updateNone':
+        // 手动检查但已是最新版：设置页会自己显示，这里不打扰主界面
+        break;
+      case 'updateProgress':
+        if (p.phase === 'downloading'){
+          updBarIn.style.width = (p.pct || 0) + '%';
+          updMsg.textContent = '下载中 ' + (p.pct || 0) + '%';
+        } else if (p.phase === 'installing'){
+          updBarIn.style.width = '100%';
+          updMsg.textContent = '正在安装，请勿断电…';
+        }
+        break;
+      case 'updateInstalled':
+        handleInstalled(p);
+        break;
     }
+  };
+
+  // ---------------- 应用更新（方案 C：自动检查只提示，确认才装） ----------------
+  var updInfo = null;
+  function showUpdate(p){
+    // 有更新才弹。记录下载信息，确认按钮要用。
+    updInfo = {url: p.url || '', size: p.size || 0, tag: p.tag || ''};
+    updOld.textContent = 'v' + (p.localName || p.localCode || '?');
+    updNew.textContent = 'v' + (p.tag || p.remoteCode || '?');
+    updBar.classList.remove('on');
+    updBarIn.style.width = '0%';
+    updMsg.textContent = '';
+    updLater.disabled = false; updLater.textContent = '稍后';
+    updGo.disabled = false; updGo.textContent = '立即更新';
+    upd.classList.add('show');
+    // 设置页浮层若开着，先收起来，否则弹框被 iframe 盖住
+    if (shell && shell.classList.contains('on')) shellOn(false);
+  }
+  function handleInstalled(p){
+    if (p.ok){
+      updMsg.textContent = '安装完成，正在重启…';
+      updGo.disabled = true; updLater.disabled = true;
+    } else {
+      updBar.classList.remove('on');
+      updMsg.textContent = '安装失败：' + (p.err || '未知错误');
+      updGo.disabled = false; updGo.textContent = '重试';
+      updLater.disabled = false; updLater.textContent = '关闭';
+    }
+  }
+  updLater.onclick = function(){
+    if (updGo.textContent === '重试'){ upd.classList.remove('show'); return; }
+    // 稍后：本次会话不再提示（记住已被忽略的版本）
+    upd.classList.remove('show');
+  };
+  updGo.onclick = function(){
+    if (!hasNative || !updInfo || !updInfo.url){
+      updMsg.textContent = '无法更新：下载链接不可用';
+      return;
+    }
+    updGo.disabled = true; updLater.disabled = true;
+    updBar.classList.add('on');
+    updBarIn.style.width = '0%';
+    updMsg.textContent = '准备下载…';
+    try { window.Native.updateInstall(updInfo.url, updInfo.size); }
+    catch(e){ handleInstalled({ok:false, err:e.message}); }
   };
 
   // ---------------- 启动 / 停止 ----------------
