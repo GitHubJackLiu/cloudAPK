@@ -57,6 +57,8 @@ public class AudioEngine {
     private Thread readThread;
     private Thread writeThread;
     private volatile boolean running;
+    private volatile boolean exclusive;          // AEC 实验期间独占 record
+    private volatile boolean captureOnly;       // 只开采集，不开下行 track
     private volatile int muted;             // 1=暂停上行（半双工）
     private volatile int level;             // 采集电平 0~100
     private int captureSource = SRC_VOICE_COMM;
@@ -84,6 +86,16 @@ public class AudioEngine {
     public void setSink(PcmSink s) { this.sink = s; }
     public void setSource(PcmSource s) { this.source = s; }
     public void setSpeakerGain(int pct) { this.speakerGain = Math.max(0, Math.min(100, pct)); }
+
+    /** AEC 实验期间独占采集通道 */
+    public void setExclusive(boolean e) { this.exclusive = e; }
+
+    /**
+     * 只开采集不开下行 track。
+     * AEC 实验时若同时存在两个 AudioTrack，HAL 的 echo reference 可能绑到
+     * 错误的那个，测出来的 ERLE 就没有意义了。
+     */
+    public void setCaptureOnly(boolean c) { this.captureOnly = c; }
 
     public int getLevel() { return level; }
     public boolean isRunning() { return running; }
@@ -148,31 +160,33 @@ public class AudioEngine {
         int outBuf = Math.max(FRAME_BYTES * 8,
                 AudioTrack.getMinBufferSize(SR_UP, AudioFormat.CHANNEL_OUT_MONO,
                         AudioFormat.ENCODING_PCM_16BIT));
-        AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(playUsage)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build();
-        AudioFormat fmt = new AudioFormat.Builder()
-                .setSampleRate(SR_UP)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build();
-        try {
-            track = new AudioTrack(attrs, fmt, outBuf,
-                    AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
-        } catch (Throwable t) {
-            Log.e(TAG, "AudioTrack create failed", t);
-            stopRecordOnly();
-            return false;
+        if (!captureOnly) {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(playUsage)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+            AudioFormat fmt = new AudioFormat.Builder()
+                    .setSampleRate(SR_UP)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build();
+            try {
+                track = new AudioTrack(attrs, fmt, outBuf,
+                        AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
+            } catch (Throwable t) {
+                Log.e(TAG, "AudioTrack create failed", t);
+                stopRecordOnly();
+                return false;
+            }
+            if (track.getState() != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioTrack not initialized");
+                track.release();
+                track = null;
+                stopRecordOnly();
+                return false;
+            }
+            track.play();
         }
-        if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioTrack not initialized");
-            track.release();
-            track = null;
-            stopRecordOnly();
-            return false;
-        }
-        track.play();
 
         running = true;
         readThread = new Thread(this::readLoop, "xz-audio-read");
@@ -221,6 +235,13 @@ public class AudioEngine {
         while (running) {
             AudioRecord r = record;
             if (r == null) break;
+            // 独占模式：AEC 实验期间由 captureToneLevel 自己读 record，
+            // 这里必须让开，否则两个线程抢同一个 AudioRecord，
+            // 采到的数据会被随机瓜分，Goertzel 量出来的残余回声全是噪声。
+            if (exclusive) {
+                try { Thread.sleep(10); } catch (InterruptedException ignored) { return; }
+                continue;
+            }
             int read = r.read(buf, 0, buf.length);
             if (read <= 0) continue;
             if (muted != 0) continue;            // 半双工：TTS 期间丢弃
@@ -319,7 +340,7 @@ public class AudioEngine {
     }
 
     /**
-     * 采一段 PCM 并返回其 1kHz 分量幅度（dBFS）。
+     * 采一段 PCM 并返回其 1kHz 分量幅度（dBFS，满量程 0 dB）。
      * 这是 ERLE 测量的「残余回声」读数端。
      */
     public double captureToneLevel(int ms, int toneHz) {
@@ -336,6 +357,7 @@ public class AudioEngine {
         }
         if (got < want / 2) return -120;
         double amp = goertzel(buf, want, toneHz, SR_UP);
-        return 20 * Math.log10(Math.max(amp, 1e-9));
+        // goertzel 返回的是 int16 幅度值，除以满量程才是 dBFS
+        return 20 * Math.log10(Math.max(amp / 32768.0, 1e-9));
     }
 }

@@ -38,6 +38,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- 调试用：adb 广播触发动作（设备上无法可靠注入按键/手势） -->
+        <receiver
+            android:name=".CmdReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.xiaodu.voice.AEC" />
+                <action android:name="com.xiaodu.voice.PANEL" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
     private Bridge bridge;
     private XzSession session;
     private WebViewClient webClient;
+    private boolean pageReady = false;
+    private String pendingCmd = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +91,8 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView v, String url) {
                 Log.i(TAG, "page loaded: " + url);
+                pageReady = true;
+                runPendingCmd();
             }
         };
         webView.setWebViewClient(webClient);
@@ -312,11 +316,29 @@ public class MainActivity extends Activity {
     private void handleCommand(Intent intent) {
         if (intent == null || intent.getAction() == null) return;
         String a = intent.getAction();
+        Log.i(TAG, "handleCommand: " + a);
         if ("com.xiaodu.voice.AEC".equals(a)) {
             Log.i(TAG, "cmd: run AEC matrix");
-            if (bridge != null) bridge.runAecMatrixNow();
+            pendingCmd = "AEC";
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
-            if (bridge != null) bridge.showAecPanel();
+            pendingCmd = "PANEL";
+        } else {
+            return;
+        }
+        // 页面没加载完时 evaluateJavascript 会静默失败，等 page finished 再执行
+        if (pageReady) {
+            runPendingCmd();
+        }
+    }
+
+    private void runPendingCmd() {
+        if (pendingCmd == null) return;
+        String c = pendingCmd;
+        pendingCmd = null;
+        if ("AEC".equals(c)) {
+            bridge.runAecMatrixNow();
+        } else if ("PANEL".equals(c)) {
+            bridge.showAecPanel();
         }
     }
 

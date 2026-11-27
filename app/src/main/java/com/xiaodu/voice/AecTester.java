@@ -100,8 +100,14 @@ public class AecTester {
         try {
             // 先建立通路（HAL 需要时间切到 speech 通路并建立 echo reference）
             engine.setPath(src, usage, mode);
+            // 独占采集：readLoop 必须让开，否则会瓜分 captureToneLevel 读到的数据
+            engine.setExclusive(true);
+            // 只开采集：避免与下行 track 争抢 echo reference 绑定
+            engine.setCaptureOnly(true);
             if (!engine.start()) {
                 r.note = "通路启动失败";
+                engine.setExclusive(false);
+                engine.setCaptureOnly(false);
                 return r;
             }
             try {
@@ -132,6 +138,8 @@ public class AecTester {
                 }
             } finally {
                 engine.stop();
+                engine.setExclusive(false);
+                engine.setCaptureOnly(false);
                 Thread.sleep(400);
             }
         } catch (Throwable t) {
