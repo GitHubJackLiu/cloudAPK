@@ -284,23 +284,69 @@ public class AudioEngine {
         }
     }
 
+/**
+     * 用引擎自己的下行 AudioTrack 播放一段 PCM 测试音。
+     *
+     * 为什么不用另开 track：AEC 的 echo reference 由 HAL 绑定在
+     * 「采集所用 AudioRecord」与「播放所用 AudioTrack」这一对对象上。
+     * 另开 track 会让 HAL 拿不到正确的参考，测出来的 ERLE 就没有意义。
+     * 真实通话时采集与播放也是走引擎这一对对象，所以这里保持一致。
+     *
+     * @param toneHz  频率
+     * @param ms      时长
+     * @param amplitude 幅度（int16）
+     */
+    public void playToneOnEngineTrack(int toneHz, int ms, int amplitude) {
+        AudioTrack t = track;
+        if (t == null) {
+            Log.e(TAG, "playToneOnEngineTrack: no engine track (captureOnly?)");
+            return;
+        }
+        try {
+            int total = SR_UP * ms / 1000;
+            byte[] bytes = new byte[total * 2];
+            for (int i = 0; i < total; i++) {
+                short v = (short) (Math.sin(2 * Math.PI * toneHz * i / SR_UP) * amplitude);
+                bytes[i * 2] = (byte) (v & 0xff);
+                bytes[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
+            }
+            int off = 0;
+            while (off < bytes.length && running) {
+                int n = t.write(bytes, off, Math.min(FRAME_BYTES * 4, bytes.length - off));
+                if (n <= 0) break;
+                off += n;
+                Thread.sleep(5);
+            }
+            Log.i(TAG, "playToneOnEngineTrack done: " + off + "/" + bytes.length + " bytes");
+        } catch (Throwable e) {
+            Log.e(TAG, "playToneOnEngineTrack failed", e);
+        }
+    }
+
     /**
      * 播放一段 PCM 测试音（用于 AEC 通路对比实验）。
      * toneHz=1000, ms=2000 生成标准 1kHz 正弦，幅度固定，便于用 Goertzel 量化残余回声。
      *
-     * 注意：AudioTrack 没有 wait(long) 方法（那是 Object 的监视器方法，
-     * 未加锁调用会抛 IllegalMonitorStateException），这里用 sleep 等待。
+     * 注意两点：
+     *   1) AudioTrack 没有 wait(long)（那是 Object 的监视器方法，未加锁会抛
+     *      IllegalMonitorStateException），这里用 Thread.sleep。
+     *   2) 用 MODE_STREAM 而不是 MODE_STATIC：MODE_STATIC 在本机上 track
+     *      初始化失败（state != STATE_INITIALIZED），测试音根本播不出去。
      */
     public void playTone(int toneHz, int ms, int amplitude) {
         AudioTrack t = null;
         try {
             int total = SR_UP * ms / 1000;
-            byte[] pcm = new byte[total * 2];
+            short[] pcm = new short[total];
             for (int i = 0; i < total; i++) {
-                short v = (short) (Math.sin(2 * Math.PI * toneHz * i / SR_UP) * amplitude);
-                pcm[i * 2] = (byte) (v & 0xff);
-                pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
+                pcm[i] = (short) (Math.sin(2 * Math.PI * toneHz * i / SR_UP) * amplitude);
             }
+            byte[] bytes = new byte[total * 2];
+            for (int i = 0; i < total; i++) {
+                bytes[i * 2] = (byte) (pcm[i] & 0xff);
+                bytes[i * 2 + 1] = (byte) ((pcm[i] >> 8) & 0xff);
+            }
+            int bufSize = Math.max(bytes.length * 2, FRAME_BYTES * 8);
             t = new AudioTrack(
                     new AudioAttributes.Builder()
                             .setUsage(playUsage)
@@ -311,16 +357,22 @@ public class AudioEngine {
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                             .build(),
-                    Math.max(pcm.length, FRAME_BYTES * 8),
-                    AudioTrack.MODE_STATIC, AudioManager.AUDIO_SESSION_ID_GENERATE);
+                    bufSize,
+                    AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
             if (t.getState() != AudioTrack.STATE_INITIALIZED) {
-                Log.e(TAG, "playTone: track not initialized");
+                Log.e(TAG, "playTone: track not initialized (usage=" + playUsage + ")");
                 return;
             }
-            t.write(pcm, 0, pcm.length);
             t.play();
-            // 等播放走完（静态 track 的长度已知）
-            long waitMs = (long) pcm.length / 2L / SR_UP * 1000L + 300;
+            // 分块写入，边写边播；写完再等播放缓冲走完
+            int off = 0;
+            while (off < bytes.length) {
+                int n = t.write(bytes, off, Math.min(FRAME_BYTES * 4, bytes.length - off));
+                if (n <= 0) break;
+                off += n;
+                Thread.sleep(10);
+            }
+            long waitMs = (long) bytes.length / 2L / SR_UP * 1000L + 400;
             Thread.sleep(waitMs);
         } catch (Throwable e) {
             Log.e(TAG, "playTone failed", e);

@@ -99,12 +99,12 @@ public class AecTester {
             engine.setPath(src, usage, mode);
             // 独占采集：readLoop 必须让开，否则会瓜分 captureToneLevel 读到的数据
             engine.setExclusive(true);
-            // 只开采集：避免与下行 track 争抢 echo reference 绑定
-            engine.setCaptureOnly(true);
+            // 注意：不设 captureOnly —— 引擎必须同时开自己的 AudioTrack，
+            // HAL 的 echo reference 绑定在「采集的 AudioRecord + 引擎的 AudioTrack」
+            // 这一对对象上，另开 track 拿不到正确的参考。
             if (!engine.start()) {
                 r.note = "通路启动失败";
                 engine.setExclusive(false);
-                engine.setCaptureOnly(false);
                 return r;
             }
             try {
@@ -119,27 +119,25 @@ public class AecTester {
                 // 采集在主测试线程，播放在独立线程并发进行
                 final double[] echo = new double[1];
                 Thread player = new Thread(new Runnable() {
-                    public void run() { engine.playTone(TONE_HZ, TONE_MS, TONE_AMP); }
+                    public void run() { engine.playToneOnEngineTrack(TONE_HZ, TONE_MS, TONE_AMP); }
                 });
                 player.start();
                 Thread.sleep(350);                       // 等播放真正开始
                 echo[0] = engine.captureToneLevel(TONE_MS - 700, TONE_HZ);
-                player.join(5000);
+                player.join(6000);
 
                 r.toneDb = echo[0];
                 r.erle = r.toneDb - r.floorDb;
 
                 // 若有声电平不高于本底，说明根本没采到测试音（播放失败或麦克风没在工作）
                 if (r.erle < 3) {
-                    r.note = "有声电平未高于本底 → " +
-                            (r.toneDb > r.floorDb ? "回声极弱" : "未采到测试音，播放可能失败");
+                    r.note = "有声电平未明显高于本底 → 回声极弱或测试音没播出来";
                 } else {
                     r.note = String.format("本底 %.1f → 有声 %.1f dBFS", r.floorDb, r.toneDb);
                 }
             } finally {
                 engine.stop();
                 engine.setExclusive(false);
-                engine.setCaptureOnly(false);
                 Thread.sleep(500);
             }
         } catch (Throwable t) {
