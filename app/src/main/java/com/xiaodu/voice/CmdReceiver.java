@@ -28,6 +28,8 @@ public class CmdReceiver extends BroadcastReceiver {
             Intent i = new Intent(context, MainActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             i.setAction(a);
+            // 广播里带的参数（如 DEMO 的文案）要一起转交，新建 Intent 默认是空的
+            if (intent.getExtras() != null) i.putExtras(intent.getExtras());
             context.startActivity(i);
         } catch (Throwable t) {
             Log.e(TAG, "start failed", t);

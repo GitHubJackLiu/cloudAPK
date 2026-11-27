@@ -451,6 +451,15 @@ public class MainActivity extends Activity {
             return;
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
             pendingCmd = "PANEL";
+        } else if ("com.xiaodu.voice.DEMO".equals(a)) {
+            // 这台设备注入不了语音输入，验证两列气泡落位只能造假事件：
+            //   am broadcast -a com.xiaodu.voice.DEMO -n com.xiaodu.voice/.MainActivity \
+            //       --es me "我这边说的话" --es ai "小智回复的话"
+            String me = intent.getStringExtra("me");
+            String ai = intent.getStringExtra("ai");
+            if (me != null) bridge.emit("stt", "{\"text\":\"" + esc(me) + "\"}");
+            if (ai != null) bridge.emit("tts", "{\"state\":\"sentence_start\",\"text\":\"" + esc(ai) + "\"}");
+            return;
         } else {
             return;
         }
@@ -458,6 +467,12 @@ public class MainActivity extends Activity {
         if (pageReady) {
             runPendingCmd();
         }
+    }
+
+    /** 最小 JSON 字符串转义：调试广播里的中文文案原样塞进 JSON 用。 */
+    private static String esc(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", " ").replace("\r", " ");
     }
 
     private void runPendingCmd() {
