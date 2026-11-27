@@ -65,14 +65,12 @@
     background:radial-gradient(circle at 50% 35%,#2b3d63,#141d30 72%);
     box-shadow:0 0 0 1px #2c3a56,0 20px 60px rgba(0,0,0,.6);
     transition:box-shadow .3s}
-  /* 表情层。两层都常驻，切换只改 opacity；旧层先 pause 再淡出，
-     交叉期间画面上始终有一张脸。SVG 渲染器跟 Kiwi 版一致。 */
-  .facelayer{position:absolute;top:0;right:0;bottom:0;left:0;opacity:0;
-    transition:opacity .16s linear}
-  .facelayer svg,.facelayer canvas{width:100%!important;height:100%!important;display:block}
+  /* 表情层：回到 Kiwi 版单层结构（destroy 旧实例再 load 新实例）。
+     SVG 渲染下建动画是同步的，不留空脸窗口；少一层就少一份合成开销。 */
+  #lottieBox{width:100%;height:100%}
+  #lottieBox svg,#lottieBox canvas{width:100%!important;height:100%!important;display:block}
   .avatar::after{content:"";position:absolute;top:-12px;right:-12px;bottom:-12px;left:-12px;border-radius:50%;
-    border:3px solid rgba(90,212,139,.7);opacity:0;pointer-events:none;
-    will-change:transform,opacity}
+    border:3px solid rgba(90,212,139,.7);opacity:0;pointer-events:none}
   .stage.speaking .avatar::after{animation:halo 1.4s ease-out infinite}
   .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 20px 60px rgba(0,0,0,.6),
                0 0 48px rgba(90,212,139,.28)}
@@ -105,11 +103,11 @@
   .lvl i{display:block;height:100%;width:0%;
     background:linear-gradient(90deg,#3fa96b,#5ad48b);transition:width .09s linear}
 
-  /* ---------- 气泡：去掉三角，用不对称圆角表达方向 ---------- */
+  /* ---------- 气泡：去掉三角，用不对称圆角表达方向 ----------
+     去掉入场动画：Kiwi 版是直接上屏的，pop 的 0.18s 淡入在低端机上
+     正好叠在事件桥接延迟上，观感就是「气泡慢慢冒出来」。 */
   .msg{max-width:100%;padding:10px 14px;font-size:15px;line-height:1.5;
-    word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.34);
-    animation:pop .18s ease-out}
-  @keyframes pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.34)}
   .msg.ai{background:rgba(31,42,61,.94);color:#e6e9ef;align-self:flex-start;
     border-radius:18px 18px 18px 6px}
   .msg.me{background:rgba(35,92,61,.94);color:#eaf7ef;align-self:flex-end;
@@ -166,10 +164,7 @@
     <div class="talk talk-l" id="talkL"></div>
     <div class="talk talk-r" id="talkR"></div>
     <div class="hero">
-      <div class="avatar">
-        <div class="facelayer" id="flA"></div>
-        <div class="facelayer" id="flB"></div>
-      </div>
+      <div class="avatar"><div id="lottieBox"></div></div>
       <div class="callwrap">
         <button class="round" id="btn" aria-label="开始通话">
           <svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>
@@ -311,15 +306,12 @@
 
   // ---------------- 表情切换 ----------------
   /*
-   * SVG 渲染器下建动画很快，实测不再出现空脸。用户反馈切换有延迟感，
-   * 所以取消人为延时，llm 情绪事件一到就立刻切。
-   * 双层淡入淡出保留：新层画满两帧才交叉，旧层先 pause 再退，
-   * 任何时刻画面上都至少有一张脸。
+   * 回到 Kiwi 版的单层结构：一个 #lottieBox，destroy 旧实例再 load 新实例。
+   * SVG 渲染下 loadAnimation 是同步建好 DOM 的，不留空脸窗口；
+   * 少一层就少一份合成/遮罩开销，也省掉了双层的淡入定时器。
+   * 表情 JSON 已在启动时预热进 emoCache，loadJson 走同步回调，无 XHR 等待。
    */
   var EMO_DELAY_MS = 0;
-  var boxes = [$('flA'), $('flB')];
-  var boxIdx = 0;                    // 当前可见的那一层
-  var layerAnim = [null, null];      // 每层里装着的 lottie 实例
   var emoNow = '', emoWant = '', emoLoad = 0, emoTimer = null, emoSched = null;
 
   function applyEmotion(name){
@@ -328,55 +320,23 @@
     var seq = ++emoLoad;
     loadJson('emoji/' + name + '.json', function(data){
       if (seq !== emoLoad) return;
-      // 永远往当前看不见的那一层里装，装好再淡入，老脸在这期间一直亮着
-      var idx = 1 - boxIdx;
-      var box = boxes[idx];
-      var prevIdx = boxIdx;
-      // 这一层还留着上一次的动画（两轮切回同一层）就先销毁，否则实例一直跑
-      if (layerAnim[idx]){ try { layerAnim[idx].destroy(); } catch(e){} layerAnim[idx] = null; }
-      box.innerHTML = '';
+      // 三步都在同一个同步代码块里，浏览器不会在中间绘制，所以看不到空脸。
+      // 先销毁旧实例、清空容器，再建新实例（loadAnimation 会往容器内 append svg）。
+      if (emoAnim){ try { emoAnim.destroy(); } catch(e){} }
+      try { $('lottieBox').innerHTML = ''; } catch(e){}
       var anim;
       try {
-        // 回到 Kiwi 版的 SVG 渲染器：不带遮罩离屏画布，336px 下实测流畅。
         anim = lottie.loadAnimation({
-          container: box, renderer: 'svg',
+          container: $('lottieBox'), renderer: 'svg',
           loop: true, autoplay: true, animationData: data
         });
       } catch(e){
-        // 建不起来就保持旧表情，绝不把脸清空
         console.log('emo load fail ' + name + ' ' + e.message);
         emoNow = '';
         return;
       }
-      layerAnim[idx] = anim;
-      var done = false, frames = 0;
-      function show(){
-        if (done) return;
-        done = true;
-        if (seq !== emoLoad){ try { anim.destroy(); } catch(e){} return; }
-        try { anim.resize(); } catch(e){}
-        boxIdx = idx;
-        emoAnim = anim;
-        box.style.opacity = '1';
-        try { facePaused ? anim.pause() : anim.play(); } catch(e){}
-        // 旧层先暂停（省 CPU）再淡出；若这段时间又切回来了就别动它
-        var oldBox = boxes[prevIdx], oldAnim = layerAnim[prevIdx];
-        if (oldAnim && oldAnim !== anim){ try { oldAnim.pause(); } catch(e){} }
-        if (prevIdx !== idx){
-          setTimeout(function(){
-            if (boxIdx === prevIdx) return;
-            oldBox.style.opacity = '0';
-          }, 240);
-        }
-      }
-      // 先挂兜底再挂事件：即使 addEventListener 出问题也不会永远不显示
-      setTimeout(show, 200);
-      try {
-        anim.addEventListener('enterFrame', function(){
-          if (done) return;
-          if (++frames >= 2) show();
-        });
-      } catch(e){}
+      emoAnim = anim;
+      try { facePaused ? anim.pause() : anim.play(); } catch(e){}
     });
   }
 
@@ -448,15 +408,17 @@
 
   setEmotion('neutral', 0, true);
   paint();
-  // 空闲时把 22 个表情 JSON 串行读进缓存。不预热的话，第一次切到某个情绪
-  // 要等一次本地 XHR + JSON.parse，这段时间脸停在上一个表情上（不空白，
-  // 但会明显「慢半拍」）。22 份合计约 900KB，1GB 机器放得下。
+  // APP 启动即开始预热：把 22 个表情 JSON 串行读进缓存，全部备齐后
+  // 任何情绪都能同步切换，不用等 XHR。间隔从 220ms 拉到 500ms —— 之前
+  // 22×220ms≈5s 内主线程被 JSON.parse 连续打断，正好压在启动/首次通话上；
+  // 现在 22×500ms≈11s 铺开，单次 parse 之间留出足够时间给渲染。
+  // 22 份合计约 900KB，1GB 机器放得下。
   (function warm(){
     var i = 0;
     var timer = setInterval(function(){
       if (i >= EMOTIONS.length){ clearInterval(timer); return; }
       loadJson('emoji/' + EMOTIONS[i++] + '.json', function(){});
-    }, 220);
+    }, 500);
   })();
 
   // ---------------- 与原生通信 ----------------
