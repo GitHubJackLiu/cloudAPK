@@ -473,6 +473,17 @@ public class MainActivity extends Activity {
             return;
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
             pendingCmd = "PANEL";
+        } else if ("com.xiaodu.voice.EVAL".equals(a)) {
+            // 调试：把一段 JS 注入主页面（设备上无法可靠点击/手势时用）。
+            //   am broadcast -a com.xiaodu.voice.EVAL -n com.xiaodu.voice/.CmdReceiver --es js "..."
+            final String js = intent.getStringExtra("js");
+            if (js != null) {
+                runOnUiThread(() -> {
+                    try { webView.evaluateJavascript(js, null); }
+                    catch (Throwable t) { Log.w(TAG, "eval failed: " + t); }
+                });
+            }
+            return;
         } else if ("com.xiaodu.voice.UPDATE".equals(a)) {
             // 手动触发更新检查（SSH/adb 自动化用），结果看 logcat tag XzUpdate，
             // 同时 emit 给页面（有更新就弹框）
