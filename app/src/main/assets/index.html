@@ -64,8 +64,13 @@
     background:radial-gradient(circle at 50% 34%,#2b3d63,#141d30 72%);
     box-shadow:0 0 0 1px #2c3a56,0 18px 52px rgba(0,0,0,.62);
     transition:box-shadow .3s}
-  #lottieBox{width:100%;height:100%}
-  #lottieBox svg,#lottieBox canvas{width:100%!important;height:100%!important;display:block}
+  /* 双缓冲：两层的 canvas 完全重叠，新表情先画好再换上来，
+     旧表情一直留到换的那一帧。以前是先在同一个容器里 destroy 再 load，
+     中间那段（解析 JSON + 建图层，这台机器上几百毫秒）脸是空的。 */
+  #lottieBox,#lottieBoxB{position:absolute;top:0;right:0;bottom:0;left:0}
+  #lottieBoxB{visibility:hidden}
+  #lottieBox svg,#lottieBox canvas,
+  #lottieBoxB svg,#lottieBoxB canvas{width:100%!important;height:100%!important;display:block}
   .avatar::after{content:"";position:absolute;top:-13px;right:-13px;bottom:-13px;left:-13px;border-radius:50%;
     border:3px solid rgba(90,212,139,.5);opacity:0;pointer-events:none;
     will-change:transform,opacity}
@@ -162,7 +167,10 @@
     <div class="talk talk-l" id="talkL"></div>
     <div class="talk talk-r" id="talkR"></div>
     <div class="hero">
-      <div class="avatar"><div id="lottieBox"></div></div>
+      <div class="avatar">
+        <div id="lottieBox"></div>
+        <div id="lottieBoxB"></div>
+      </div>
       <div class="callwrap">
         <button class="round" id="btn" aria-label="开始通话">
           <svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>
@@ -295,10 +303,15 @@
    * 「退到后台」这两种完全看不见的情况下暂停。
    * 暂停用原生 pause()/play()，不会像手写步进那样丢帧或卡死。
    */
+  var facePaused = false;
   function setFacePaused(on){
+    facePaused = !!on;
     if (!emoAnim) return;
     try { on ? emoAnim.pause() : emoAnim.play(); } catch(e){}
   }
+
+  var boxes = [$('lottieBox'), $('lottieBoxB')];
+  var boxIdx = 0;
 
   function setEmotion(name, holdMs){
     name = (EMOTIONS.indexOf(name) >= 0) ? name : 'neutral';
@@ -309,19 +322,44 @@
     var seq = ++emoLoad;
     loadJson('emoji/' + name + '.json', function(data){
       if (seq !== emoLoad) return;
-      if (emoAnim) emoAnim.destroy();
-      // canvas 比 svg 省得多：svg 每帧要动几十个 path 节点，脸放大到 404px 后
-      // 重绘面积翻了 3 倍，MT8167 的 CPU 顶不住，直接用手点都发涩。
-      emoAnim = lottie.loadAnimation({
-        container: $('lottieBox'), renderer: 'canvas',
-        loop: true, autoplay: true, animationData: data,
-        rendererSettings: { clearCanvas: true, progressiveLoad: true,
-                            hideOnTransparent: true }
-      });
-      // 容器尺寸是百分比，若首次 load 时布局还没落地，canvas 会按 0×0 建出来
-      setTimeout(function(){
-        try { emoAnim && emoAnim.resize(); } catch(e){}
-      }, 60);
+      var prev = emoAnim;
+      var idx = 1 - boxIdx;
+      var box = boxes[idx];
+      var anim;
+      try {
+        // canvas 比 svg 省得多：svg 每帧要动几十个 path 节点，脸放大到 404px 后
+        // 重绘面积翻了 3 倍，MT8167 的 CPU 顶不住，直接用手点都发涩。
+        anim = lottie.loadAnimation({
+          container: box, renderer: 'canvas',
+          loop: true, autoplay: true, animationData: data,
+          rendererSettings: { clearCanvas: true, progressiveLoad: true,
+                              hideOnTransparent: true }
+        });
+      } catch(e){
+        // 建不起来就保持旧表情，绝不把脸清空
+        console.log('emo load fail ' + name + ' ' + e.message);
+        return;
+      }
+      var done = false;
+      function swap(){
+        if (done) return;
+        done = true;
+        if (seq !== emoLoad){                 // 已经被更新的一轮取代
+          try { anim.destroy(); } catch(e){}
+          return;
+        }
+        try { anim.resize(); } catch(e){}
+        box.style.visibility = 'visible';
+        boxes[boxIdx].style.visibility = 'hidden';
+        boxIdx = idx;
+        emoAnim = anim;
+        // 旧的那张最后再销毁：顺序反了就会闪一下空脸
+        if (prev && prev !== anim){ try { prev.destroy(); } catch(e){} }
+        if (facePaused) { try { anim.pause(); } catch(e){} }
+      }
+      // 第一帧真的画出来了才换上去；400ms 兜底防止某些表情不触发 enterFrame
+      anim.addEventListener('enterFrame', swap);
+      setTimeout(swap, 400);
     });
   }
 
