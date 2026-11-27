@@ -40,7 +40,7 @@ public class AudioEngine {
 
     /** 采集输入源 */
     public static final int SRC_VOICE_COMM = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
-    public static final int SRC_VOICE_CALL  = MediaRecorder.AudioSource.VOICE_CALL;
+    public static final int SRC_VOICE_RECOG = MediaRecorder.AudioSource.VOICE_RECOGNITION;
     public static final int SRC_MIC         = MediaRecorder.AudioSource.MIC;
 
     /** 播放用途 */

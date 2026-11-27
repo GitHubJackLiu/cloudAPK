@@ -65,28 +65,28 @@ public class AecTester {
     public List<Result> runMatrix(final ProgressCb cb) {
         List<Result> out = new ArrayList<>();
         String[][] cases = {
-                // 基线：等效浏览器通路，framework 层无 AEC
+                // 基线：MIC 采集，HAL 走普通 handler，没有语音 AEC
                 {"A · MIC+MEDIA+NORMAL（基线·等效浏览器）", "null"},
-                // 只改播放侧
+                // MIC 采集 + 语音模式播放
                 {"B · MIC+VOICECOMM+COMM", "null"},
-                // 只改采集侧（VOICE_COMMUNICATION 会让 HAL 走 AEC 通路）
+                // 语音采集，HAL 走 AUDIO_SOURCE_VOICE_COMMUNICATION 分支
                 {"C · VOICECOMM+VOICECOMM+NORMAL", "null"},
-                // 采集+播放+通信模式
+                // 语音采集 + 语音播放 + 通信模式（目标）
                 {"D · VOICECOMM+VOICECOMM+COMM", "null"},
-                // VOICE_CALL 也是语音通路，试试
-                {"E · VOICECALL+VOICECOMM+COMM", "null"},
-                // 采集 VOICE_COMMUNICATION + 播放走 MEDIA
-                {"F · VOICECOMM+MEDIA+NORMAL", "null"},
+                // 语音采集 + 语音播放 + 通信模式，再跑一遍（复验稳定性）
+                {"D2 · VOICECOMM+VOICECOMM+COMM（复验）", "null"},
+                // VOICE_RECOGNITION 也是语音系（API 6）
+                {"F · VOICERECOGN+VOICECOMM+COMM", "null"},
         };
         int[] srcs = {AudioEngine.SRC_MIC, AudioEngine.SRC_MIC,
                 AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_COMM,
-                AudioEngine.SRC_VOICE_CALL, AudioEngine.SRC_VOICE_COMM};
+                AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_RECOG};
         int[] uses = {AudioEngine.USE_MEDIA, AudioEngine.USE_VOICE_COMM,
                 AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM,
-                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_MEDIA};
+                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM};
         int[] modes = {AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM,
                 AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM,
-                AudioEngine.MODE_COMM, AudioEngine.MODE_NORMAL};
+                AudioEngine.MODE_COMM, AudioEngine.MODE_COMM};
 
         for (int i = 0; i < cases.length; i++) {
             if (cancel) break;
