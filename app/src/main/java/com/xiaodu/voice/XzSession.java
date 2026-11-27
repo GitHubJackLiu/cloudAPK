@@ -455,6 +455,7 @@ public class XzSession {
                 }
                 byte[] plain = AesCtr.decrypt(aesKey, Arrays.copyOfRange(data, 0, 16),
                         Arrays.copyOfRange(data, 16, len));
+                if (plain == null) continue;
                 // 解码器建在 16k，服务端 24k 编码的流直接解成 16k，
                 // 播放端 AudioTrack 与采集同为 16k，不需要重采样。
                 byte[] pcm = OpusCodec.decode(plain);
@@ -483,14 +484,33 @@ public class XzSession {
         }
     }
 
-    /** 小智 UDP 音频包 nonce：前2B + 包长(2B) + 中间8B + 序号(4B) */
+    /**
+     * 小智 UDP 音频包 nonce（必须凑满 16 字节，AES-CTR 的 IV 长度是硬要求）：
+     *   前 2B  = nonce_hex[0:4]
+     *   包长   = %04x (2B)
+     *   中间 8B = nonce_hex[8:24]
+     *   序号   = %08x (4B)
+     * 合计 4+4+16+8 = 32 个 hex 字符 = 16 字节。
+     * 注意 substring 的下标是「hex 字符」不是「字节」。
+     */
     private byte[] buildAudioNonce(String nonceHex, int audioLen, long sequence) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(pad(nonceHex, 0, 2));
+        StringBuilder sb = new StringBuilder(32);
+        sb.append(hexSlice(nonceHex, 0, 4));
         sb.append(String.format("%04x", audioLen));
-        sb.append(pad(nonceHex, 4, 12));
+        sb.append(hexSlice(nonceHex, 8, 24));
         sb.append(String.format("%08x", sequence));
         return hexToBytes(sb.toString());
+    }
+
+    /** 取 hex 串的 [from,to) 字符区间；越界或为 null 时补足同样长度的 0 */
+    private static String hexSlice(String s, int from, int to) {
+        int want = to - from;
+        if (s == null || s.length() < to) {
+            StringBuilder z = new StringBuilder(want);
+            for (int i = 0; i < want; i++) z.append('0');
+            return z.toString();
+        }
+        return s.substring(from, to);
     }
 
     private static String pad(String s, int from, int to) {
@@ -568,6 +588,12 @@ public class XzSession {
         }
         byte[] nonce = buildAudioNonce(nonceHex, opus.length, s);
         byte[] body = AesCtr.encrypt(aesKey, nonce, opus);
+        if (body == null) {
+            Log.w(TAG, "encrypt returned null (key/iv="
+                    + (aesKey == null ? -1 : aesKey.length) + "/"
+                    + (nonce == null ? -1 : nonce.length) + ")");
+            return;
+        }
         byte[] packet = new byte[16 + body.length];
         packet[0] = 0x01;
         packet[1] = 0x00;
