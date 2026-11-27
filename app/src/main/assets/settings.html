@@ -228,6 +228,9 @@
     if (pin.length < 6) return;
     if (pin === LOCK_PWD){
       $('lock').classList.add('hide');
+      // 记住本次会话已解锁：否则从 Wi-Fi 页返回设置就要重输一遍密码。
+      // sessionStorage 随 WebView 进程销毁而清除，关掉应用仍会重新上锁。
+      try { sessionStorage.setItem('xzUnlocked', '1'); } catch(e){}
       pin = ''; paintPin();
     } else {
       $('lockErr').textContent = '密码不对，请重试';
@@ -251,6 +254,9 @@
     else if (e.key === 'Backspace') pressKey('del');
   });
   paintPin();
+  try {
+    if (sessionStorage.getItem('xzUnlocked') === '1') $('lock').classList.add('hide');
+  } catch(e){}
 
   function toast(t){
     var el = $('toast');
