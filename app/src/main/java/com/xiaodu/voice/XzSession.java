@@ -62,6 +62,21 @@ public class XzSession {
     private byte[] aesKey = new byte[16];
     private String nonceHex = "";
     private long seq = 0;
+
+    /*
+     * 本地静音检测（VAD）。
+     *
+     * 不自己判「说完了」的话，全靠服务端那边的 VAD：它要求静音满 700ms~1s
+     * 才认一句话结束，用户体感就是「我说完它愣一下才回」。
+     * 客户端检测到静音后补一条 listen/detect，服务端可以直接进入识别，
+     * 这一段延迟就省掉了。
+     */
+    private static final int VAD_ON_PEAK = 1200;        // 约 -29 dBFS
+    private static final long VAD_SILENCE_MS = 640;
+    private boolean vadSpeaking = false;
+    private long vadLastVoice = 0;
+    private long vadLastDetect = 0;
+
     private volatile int upCount = 0;      // 已发送上行帧数（诊断用）
     private volatile int downCount = 0;    // 已收到下行帧数（诊断用）
 
@@ -486,16 +501,19 @@ public class XzSession {
         }
     }
 
-    private void sendListen(String state) {
+    private void sendListen(String state) { sendListen(state, null); }
+
+    private void sendListen(String state, String text) {
         if (mqtt == null) return;
         if ("stop".equals(state)) armed = false;
-        else armed = true;
+        else if (!"detect".equals(state)) armed = true;
         try {
             JSONObject o = new JSONObject();
             o.put("type", "listen");
             o.put("state", state);
             o.put("session_id", sessionId);
             if ("start".equals(state)) o.put("mode", "auto");
+            if (text != null) o.put("text", text);
             mqtt.publish(publishTopic, o.toString());
         } catch (Throwable t) {
             Log.w(TAG, "sendListen: " + t);
@@ -649,8 +667,10 @@ public class XzSession {
             // 半双工暂停期间丢弃积压，否则恢复开麦时会把 TTS 期间的
             // 陈旧音频当成用户说话发上去。
             upFill = 0;
+            vadSpeaking = false;
             return;
         }
+        try { vadTrack(data, len); } catch (Throwable ignored) { }
         try {
             int off = 0;
             int frameBytes = XZ_UP_SAMPLES * 2;
@@ -676,6 +696,31 @@ public class XzSession {
         } catch (Throwable t) {
             Log.w(TAG, "onMicPcm: " + t);
         }
+    }
+
+    /** 本地静音检测：说话结束后补一条 detect，让服务端立刻开始识别 */
+    private void vadTrack(byte[] data, int len) {
+        int mx = 0;
+        for (int i = 0; i + 1 < len; i += 2) {
+            int v = (data[i] & 0xff) | (data[i + 1] << 8);
+            if (v < 0) v = -v;
+            if (v > mx) mx = v;
+        }
+        long now = System.currentTimeMillis();
+        if (mx > VAD_ON_PEAK) {
+            vadSpeaking = true;
+            vadLastVoice = now;
+            return;
+        }
+        if (!vadSpeaking) return;
+        if (now - vadLastVoice < VAD_SILENCE_MS) return;
+        vadSpeaking = false;
+        // 冷却：服务端自己可能已经收尾了，别对着同一句话连发 detect
+        if (!running.get() || paused || !armed || mqtt == null) return;
+        if (now - vadLastDetect < 1200) return;
+        vadLastDetect = now;
+        sendListen("detect", "");
+        Log.i(TAG, "vad detect (silence " + (now - vadLastVoice) + "ms)");
     }
 
     /** 上行编码发送线程（与采集解耦） */
