@@ -65,17 +65,28 @@ public class AecTester {
     public List<Result> runMatrix(final ProgressCb cb) {
         List<Result> out = new ArrayList<>();
         String[][] cases = {
-                {"A · MIC+MEDIA+NORMAL（基线·等效浏览器通路）", "null"},
+                // 基线：等效浏览器通路，framework 层无 AEC
+                {"A · MIC+MEDIA+NORMAL（基线·等效浏览器）", "null"},
+                // 只改播放侧
                 {"B · MIC+VOICECOMM+COMM", "null"},
+                // 只改采集侧（VOICE_COMMUNICATION 会让 HAL 走 AEC 通路）
                 {"C · VOICECOMM+VOICECOMM+NORMAL", "null"},
-                {"D · VOICECOMM+VOICECOMM+COMM（目标）", "null"},
+                // 采集+播放+通信模式
+                {"D · VOICECOMM+VOICECOMM+COMM", "null"},
+                // VOICE_CALL 也是语音通路，试试
+                {"E · VOICECALL+VOICECOMM+COMM", "null"},
+                // 采集 VOICE_COMMUNICATION + 播放走 MEDIA
+                {"F · VOICECOMM+MEDIA+NORMAL", "null"},
         };
         int[] srcs = {AudioEngine.SRC_MIC, AudioEngine.SRC_MIC,
-                AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_COMM};
+                AudioEngine.SRC_VOICE_COMM, AudioEngine.SRC_VOICE_COMM,
+                AudioEngine.SRC_VOICE_CALL, AudioEngine.SRC_VOICE_COMM};
         int[] uses = {AudioEngine.USE_MEDIA, AudioEngine.USE_VOICE_COMM,
-                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM};
+                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.USE_VOICE_COMM, AudioEngine.USE_MEDIA};
         int[] modes = {AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM,
-                AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM};
+                AudioEngine.MODE_NORMAL, AudioEngine.MODE_COMM,
+                AudioEngine.MODE_COMM, AudioEngine.MODE_NORMAL};
 
         for (int i = 0; i < cases.length; i++) {
             if (cancel) break;
@@ -134,8 +145,7 @@ public class AecTester {
                     r.note = "有声电平未明显高于本底 → 回声极弱或测试音没播出来";
                 } else {
                     r.note = String.format("本底 %.1f → 有声 %.1f dBFS", r.floorDb, r.toneDb);
-                }
-            } finally {
+                }            } finally {
                 engine.stop();
                 engine.setExclusive(false);
                 Thread.sleep(500);
