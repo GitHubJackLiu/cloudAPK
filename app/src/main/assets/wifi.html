@@ -6,6 +6,9 @@
 <title>Wi-Fi</title>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  /* 触摸设备不需要焦点框：input tap / 手指点击后会留一圈橙色 outline，很像 bug */
+  button{outline:0}
+  button:focus,button:active{outline:0}
   html,body{margin:0;height:100%;background:#0b0e14;color:#e6e9ef;
     font-family:-apple-system,"Noto Sans SC",sans-serif}
   body{overflow-y:auto;font-size:15px}
