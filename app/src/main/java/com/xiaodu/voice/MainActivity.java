@@ -150,9 +150,13 @@ public class MainActivity extends Activity {
      */
     public void applyBrightness(int pct) {
         try {
-            float v = Math.max(0.04f, Math.min(1f, pct / 100f));
             WindowManager.LayoutParams lp = getWindow().getAttributes();
-            lp.screenBrightness = v;
+            if (pct >= 100) {
+                // 100% = 跟随系统亮度，不强行把背光顶到最大（省电、也不刺眼）
+                lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            } else {
+                lp.screenBrightness = Math.max(0.04f, Math.min(1f, pct / 100f));
+            }
             getWindow().setAttributes(lp);
         } catch (Throwable t) {
             Log.w(TAG, "applyBrightness failed: " + t);

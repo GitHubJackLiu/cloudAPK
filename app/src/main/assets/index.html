@@ -30,7 +30,7 @@
   .hud-tl span{font-size:12px;color:#9aa3b5;letter-spacing:.2px;white-space:nowrap}
 
   /* ---------- 舞台 ---------- */
-  .stage{position:absolute;inset:0;display:flex;flex-direction:column}
+  .stage{position:absolute;top:0;right:0;bottom:0;left:0;display:flex;flex-direction:column}
   /* 视口是 973x600 横屏，高度非常紧张：
      对话区固定比例、头像按 vh/vw 双重约束，保证按钮永不被挤出屏幕 */
   .talk{flex:0 0 36%;min-height:0;overflow-y:auto;overflow-x:hidden;
@@ -47,7 +47,7 @@
     transition:box-shadow .3s}
   #lottieBox{width:100%;height:100%}
   #lottieBox svg{width:100%!important;height:100%!important;display:block}
-  .avatar::after{content:"";position:absolute;inset:-13px;border-radius:50%;
+  .avatar::after{content:"";position:absolute;top:-13px;right:-13px;bottom:-13px;left:-13px;border-radius:50%;
     border:3px solid rgba(90,212,139,.5);opacity:0;pointer-events:none}
   .stage.speaking .avatar::after{animation:halo 1.5s ease-out infinite}
   .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 18px 52px rgba(0,0,0,.62),
@@ -93,7 +93,7 @@
     text-align:center;box-shadow:none}
 
   /* 未绑定时的验证码面板 */
-  #act{position:fixed;inset:0;z-index:120;display:none;padding:26px;
+  #act{position:fixed;top:0;right:0;bottom:0;left:0;z-index:120;display:none;padding:26px;
     background:rgba(8,11,17,.95);align-items:center;justify-content:center}
   #act.show{display:flex}
   .actcard{width:100%;max-width:460px;text-align:center}
@@ -112,7 +112,7 @@
   @keyframes sp{to{transform:rotate(360deg)}}
 
   /* AEC 通路实验面板（调试用，长按齿轮打开） */
-  #aec{position:fixed;inset:0;z-index:150;display:none;flex-direction:column;
+  #aec{position:fixed;top:0;right:0;bottom:0;left:0;z-index:150;display:none;flex-direction:column;
     background:#0b0e14;padding:12px 14px}
   #aec.show{display:flex}
   .aectop{display:flex;align-items:center;gap:10px;margin-bottom:10px}
