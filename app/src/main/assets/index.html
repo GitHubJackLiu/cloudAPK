@@ -64,13 +64,13 @@
     background:radial-gradient(circle at 50% 34%,#2b3d63,#141d30 72%);
     box-shadow:0 0 0 1px #2c3a56,0 18px 52px rgba(0,0,0,.62);
     transition:box-shadow .3s}
-  /* 双缓冲：两层的 canvas 完全重叠，新表情先画好再换上来，
-     旧表情一直留到换的那一帧。以前是先在同一个容器里 destroy 再 load，
-     中间那段（解析 JSON + 建图层，这台机器上几百毫秒）脸是空的。 */
-  #lottieBox,#lottieBoxB{position:absolute;top:0;right:0;bottom:0;left:0}
-  #lottieBoxB{visibility:hidden}
-  #lottieBox svg,#lottieBox canvas,
-  #lottieBoxB svg,#lottieBoxB canvas{width:100%!important;height:100%!important;display:block}
+  /* 表情层。两层都常驻，切换只改 opacity，不再「先销毁再新建」。
+     旧做法靠 visibility 硬切，新的 canvas 只要没画出来（首帧空白、尺寸算成 0、
+     建动画被主线程拖住）看到的就是「脸消失 1~2 秒」；改成淡入淡出后，
+     交叉期间旧脸一直在，任何情况下都不会出现空脸。 */
+  .facelayer{position:absolute;top:0;right:0;bottom:0;left:0;opacity:0;
+    transition:opacity .22s linear}
+  .facelayer svg,.facelayer canvas{width:100%!important;height:100%!important;display:block}
   .avatar::after{content:"";position:absolute;top:-13px;right:-13px;bottom:-13px;left:-13px;border-radius:50%;
     border:3px solid rgba(90,212,139,.5);opacity:0;pointer-events:none;
     will-change:transform,opacity}
@@ -168,8 +168,8 @@
     <div class="talk talk-r" id="talkR"></div>
     <div class="hero">
       <div class="avatar">
-        <div id="lottieBox"></div>
-        <div id="lottieBoxB"></div>
+        <div class="facelayer" id="flA"></div>
+        <div class="facelayer" id="flB"></div>
       </div>
       <div class="callwrap">
         <button class="round" id="btn" aria-label="开始通话">
@@ -258,7 +258,7 @@
     '1f924':'delicious','1f618':'kissy','1f60f':'confident','1f634':'sleepy',
     '1f61c':'silly','1f644':'confused'
   };
-  var emoAnim = null, emoNow = '', emoLoad = 0, emoTimer = null;
+  var emoAnim = null;
   function emojiOf(text){
     if (!text) return '';
     var cps = Array.from(text).map(function(c){ return c.codePointAt(0).toString(16); });
@@ -310,21 +310,35 @@
     try { on ? emoAnim.pause() : emoAnim.play(); } catch(e){}
   }
 
-  var boxes = [$('lottieBox'), $('lottieBoxB')];
-  var boxIdx = 0;
+  // ---------------- 表情切换 ----------------
+  /*
+   * 实测事件时间线（14:31:53.659 llm → .793 tts.sentence_start → .991 首个音频包）：
+   * 文本其实比声音早，可用户听到的却是「话先说、文字后显示」。原因不在协议，
+   * 在渲染——`lottie.loadAnimation` 建 canvas 动画（每个表情还带 track matte，
+   * canvas 渲染器要额外两张离屏画布做合成）在这台 CPU 上是几百毫秒的同步开销，
+   * 正好堵在 llm 与 sentence_start 之间，把随后的文本 DOM 更新一起压住。
+   * 所以：① 表情切换整体延后 320ms，让文本先落屏；② 每层单独淡入淡出，
+   * 新层画满两帧才开始交叉，旧的在整个交叉期都还在，画面上不会出现空脸。
+   */
+  var EMO_DELAY_MS = 320;
+  var boxes = [$('flA'), $('flB')];
+  var boxIdx = 0;                    // 当前可见的那一层
+  var layerAnim = [null, null];      // 每层里装着的 lottie 实例
+  var emoNow = '', emoWant = '', emoLoad = 0, emoTimer = null, emoSched = null;
 
-  function setEmotion(name, holdMs){
-    name = (EMOTIONS.indexOf(name) >= 0) ? name : 'neutral';
-    if (emoTimer){ clearTimeout(emoTimer); emoTimer = null; }
-    if (holdMs > 0){ emoTimer = setTimeout(function(){ setEmotion('neutral'); }, holdMs); }
+  function applyEmotion(name){
     if (name === emoNow && emoAnim) return;
     emoNow = name;
     var seq = ++emoLoad;
     loadJson('emoji/' + name + '.json', function(data){
       if (seq !== emoLoad) return;
-      var prev = emoAnim;
+      // 永远往当前看不见的那一层里装，装好再淡入，老脸在这期间一直亮着
       var idx = 1 - boxIdx;
       var box = boxes[idx];
+      var prevIdx = boxIdx;
+      // 这一层还留着上一次的动画（两轮切回同一层）就先销毁，否则实例一直跑
+      if (layerAnim[idx]){ try { layerAnim[idx].destroy(); } catch(e){} layerAnim[idx] = null; }
+      box.innerHTML = '';
       var anim;
       try {
         // canvas 比 svg 省得多：svg 每帧要动几十个 path 节点，脸放大到 404px 后
@@ -338,30 +352,53 @@
       } catch(e){
         // 建不起来就保持旧表情，绝不把脸清空
         console.log('emo load fail ' + name + ' ' + e.message);
+        emoNow = '';
         return;
       }
-      var done = false;
-      function swap(){
+      layerAnim[idx] = anim;
+      var done = false, frames = 0;
+      function show(){
         if (done) return;
         done = true;
-        if (seq !== emoLoad){                 // 已经被更新的一轮取代
-          try { anim.destroy(); } catch(e){}
-          return;
-        }
+        if (seq !== emoLoad){ try { anim.destroy(); } catch(e){} return; }
         try { anim.resize(); } catch(e){}
-        box.style.visibility = 'visible';
-        boxes[boxIdx].style.visibility = 'hidden';
         boxIdx = idx;
         emoAnim = anim;
-        // 旧的那张最后再销毁：顺序反了就会闪一下空脸
-        if (prev && prev !== anim){ try { prev.destroy(); } catch(e){} }
-        if (facePaused) { try { anim.pause(); } catch(e){} }
+        box.style.opacity = '1';
+        if (facePaused){ try { anim.pause(); } catch(e){} }
+        // 旧层先暂停（省 CPU）再淡出；若这段时间又切回来了就别动它
+        var oldBox = boxes[prevIdx], oldAnim = layerAnim[prevIdx];
+        if (oldAnim && oldAnim !== anim){ try { oldAnim.pause(); } catch(e){} }
+        if (prevIdx !== idx){
+          setTimeout(function(){
+            if (boxIdx === prevIdx) return;
+            oldBox.style.opacity = '0';
+          }, 240);
+        }
       }
-      // 第一帧真的画出来了才换上去；400ms 兜底防止某些表情不触发 enterFrame
-      anim.addEventListener('enterFrame', swap);
-      setTimeout(swap, 400);
+      // 先挂兜底再挂事件：即使 addEventListener 出问题也不会永远不显示
+      setTimeout(show, 380);
+      try {
+        anim.addEventListener('enterFrame', function(){
+          if (done) return;
+          if (++frames >= 2) show();
+        });
+      } catch(e){}
     });
   }
+
+  function setEmotion(name, holdMs, immediate){
+    name = (EMOTIONS.indexOf(name) >= 0) ? name : 'neutral';
+    if (emoTimer){ clearTimeout(emoTimer); emoTimer = null; }
+    if (holdMs > 0){ emoTimer = setTimeout(function(){ setEmotion('neutral', 0, true); }, holdMs); }
+    if (name === emoWant) return;
+    emoWant = name;
+    if (emoSched){ clearTimeout(emoSched); emoSched = null; }
+    if (immediate){ applyEmotion(name); return; }
+    emoSched = setTimeout(function(){ emoSched = null; applyEmotion(name); },
+                          EMO_DELAY_MS);
+  }
+
 
   function msg(text, cls){
     var d = document.createElement('div');
@@ -416,8 +453,18 @@
     statusBox.className = 'hud hud-bl' + (sd ? '' : ' hide');
   }
 
-  setEmotion('neutral');
+  setEmotion('neutral', 0, true);
   paint();
+  // 空闲时把 22 个表情 JSON 串行读进缓存。不预热的话，第一次切到某个情绪
+  // 要等一次本地 XHR + JSON.parse，这段时间脸停在上一个表情上（不空白，
+  // 但会明显「慢半拍」）。22 份合计约 900KB，1GB 机器放得下。
+  (function warm(){
+    var i = 0;
+    var timer = setInterval(function(){
+      if (i >= EMOTIONS.length){ clearInterval(timer); return; }
+      loadJson('emoji/' + EMOTIONS[i++] + '.json', function(){});
+    }, 220);
+  })();
 
   // ---------------- 与原生通信 ----------------
   var hasNative = (typeof window.Native !== 'undefined');
