@@ -311,18 +311,28 @@ public class UpdateChecker {
     /**
      * 覆盖安装后拉起新版本。
      *
-     * 不能用 am force-stop：实测它会把发起安装的主进程一起停掉，
-     * 而 su 子进程是主进程 fork 的，往往在 force-stop 后拿不到执行机会，
-     * 结果 am start 没跑，设备停在桌面（17:34 实测）。
-     * pm install -r 覆盖安装本身就会让系统在下次启动时换用新代码，
-     * 这里只需 am start 把 Activity 切回前台即可。
+     * 实测（17:34/17:38）：pm install -r 覆盖安装会让 PackageManager 杀掉
+     * 发起安装的 App 进程（"codePath changed ... using new"），所以任何在
+     * App 线程里、需要 waitFor 的拉起都会随进程消亡而失败 —— 设备停在桌面。
+     *
+     * 解法：起一个完全独立的 su 进程执行 "sleep 3; am start ..."，
+     * 并且 Java 侧立刻返回、不 waitFor。等它 sleep 完时 App 已被系统用
+     * 新 codePath 重建，am start 把 Activity 切回前台。用 nohup + 后台 &
+     * 让这条命令脱离父进程的生命周期。
      */
     private void restartApp() {
-        new Thread(() -> {
-            try { Thread.sleep(800); } catch (InterruptedException ignored) { }
-            String r = su("am start -n com.xiaodu.voice/.MainActivity");
-            Log.i(TAG, "restart: " + clip(r, 120));
-        }, "xz-restart").start();
+        try {
+            // setsid 让命令脱离 App 的进程组，重定向三个流避免继承管道；
+            // 这样 App 进程被覆盖安装终止时，这条命令仍能独立跑完。
+            Process p = Runtime.getRuntime().exec(new String[]{
+                    "su", "-c", "/system/bin/setsid /system/bin/sh -c "
+                            + "'sleep 4; am start -n com.xiaodu.voice/.MainActivity' "
+                            + "</dev/null >/dev/null 2>&1 &"});
+            // 不 waitFor：本进程即将被覆盖安装终止，等不到结果。
+            Log.i(TAG, "restart detached issued");
+        } catch (Throwable t) {
+            Log.w(TAG, "restart failed: " + t);
+        }
     }
 
     private static void put(JSONObject o, String k, Object v) {
