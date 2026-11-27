@@ -287,24 +287,17 @@
   }
 
   /**
-   * 表情步进器：这些表情 JSON 都是 fr=60、200 帧，lottie 默认跟着 rAF
-   * 每秒重绘 60 次。MT8167 上光这一项就能吃掉一整个核（实测 149% CPU，
-   * 其中 70% 是内核态 —— 每帧都在申请/释放 canvas 位图）。
-   * 表情本来就是眨眼、咧嘴这类慢动作，20fps 肉眼没有区别，重绘量降到 1/3。
+   * 表情暂停/恢复。
+   *
+   * 历史：曾经为了省 CPU 手写过 20fps 步进器（autoplay:false + 定时 goToAndStop），
+   * 结果是动作一顿一顿、还会在某一帧抛异常后静默停住，脸卡在眨眼帧上不动。
+   * 现在恢复 lottie 原生循环（60fps + 亚帧插值），只在「被设置页盖住」和
+   * 「退到后台」这两种完全看不见的情况下暂停。
+   * 暂停用原生 pause()/play()，不会像手写步进那样丢帧或卡死。
    */
-  var EMO_FPS = 20;
-  var stepTimer = null, stepN = 0, stepTotal = 1;
-  function stopStepper(){ if (stepTimer){ clearInterval(stepTimer); stepTimer = null; } }
-  function startStepper(anim){
-    stopStepper();
-    stepTotal = Math.max(1, Math.round(anim.totalFrames || 1));
-    stepN = 0;
-    stepTimer = setInterval(function(){
-      if (!emoAnim){ stopStepper(); return; }
-      stepN = (stepN + 1) % stepTotal;
-      try { emoAnim.goToAndStop(stepN, true); }
-      catch(e){ stopStepper(); }
-    }, Math.round(1000 / EMO_FPS));
+  function setFacePaused(on){
+    if (!emoAnim) return;
+    try { on ? emoAnim.pause() : emoAnim.play(); } catch(e){}
   }
 
   function setEmotion(name, holdMs){
@@ -316,21 +309,16 @@
     var seq = ++emoLoad;
     loadJson('emoji/' + name + '.json', function(data){
       if (seq !== emoLoad) return;
-      stopStepper();
       if (emoAnim) emoAnim.destroy();
       // canvas 比 svg 省得多：svg 每帧要动几十个 path 节点，脸放大到 404px 后
       // 重绘面积翻了 3 倍，MT8167 的 CPU 顶不住，直接用手点都发涩。
       emoAnim = lottie.loadAnimation({
         container: $('lottieBox'), renderer: 'canvas',
-        loop: true, autoplay: false, animationData: data,
+        loop: true, autoplay: true, animationData: data,
         rendererSettings: { clearCanvas: true, progressiveLoad: true,
                             hideOnTransparent: true }
       });
       // 容器尺寸是百分比，若首次 load 时布局还没落地，canvas 会按 0×0 建出来
-      // 关掉亚帧插值：默认每帧要按时间在关键帧之间插值两次以上，
-      // 这台机器上直接省掉约三成渲染耗时，肉眼几乎看不出差别
-      try { emoAnim.setSubframe(false); } catch(e){}
-      startStepper(emoAnim);
       setTimeout(function(){
         try { emoAnim && emoAnim.resize(); } catch(e){}
       }, 60);
@@ -418,11 +406,10 @@
 
   // 首次点齿轮才真正加载设置页，避免拖慢冷启动；之后就是 display 切换，瞬时
   var shell = $('shell');
-  // 设置页盖上来的这块时间，脸完全被挡住，没必要还在下面 20fps 重绘
+  // 设置页盖上来的这块时间，脸完全被挡住，没必要还在下面 60fps 重绘
   function shellOn(on){
     shell.classList.toggle('on', on);
-    if (on) stopStepper();
-    else if (emoAnim) startStepper(emoAnim);
+    setFacePaused(on);
   }
   gear.onclick = function(){
     if (shell.getAttribute('data-loaded') !== '1'){
@@ -435,10 +422,9 @@
   window.addEventListener('message', function(e){
     if (e && e.data === 'xz-close-shell') shellOn(false);
   });
-  // 退到后台时 setInterval 不会被浏览器停掉，白白烧 CPU
+  // 退到后台时 WebView 的 rAF 会停，但保险起见还是显式 pause 一下
   document.addEventListener('visibilitychange', function(){
-    if (document.hidden) stopStepper();
-    else if (emoAnim && !shell.classList.contains('on')) startStepper(emoAnim);
+    setFacePaused(document.hidden || shell.classList.contains('on'));
   }, false);
 
   // ---------------- 原生事件入口 ----------------
