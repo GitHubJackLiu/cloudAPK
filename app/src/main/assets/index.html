@@ -58,9 +58,10 @@
 
   .hero{position:absolute;top:0;right:0;bottom:0;left:0;
     display:flex;align-items:center;justify-content:center}
-  /* 回到 Kiwi 版的 336px。上一版放到 404px + Canvas 遮罩合成，
-     gfxinfo 实测 janky 87%、每帧 46ms，气泡和按钮都跟着排队。 */
-  .avatar{width:min(336px,72vh,46vw);height:min(336px,72vh,46vw);border-radius:50%;
+  /* 头像恢复到 404px（72vh×561≈404）。之前这个尺寸卡是因为同时用了
+     Canvas + track matte 遮罩（每帧两张离屏画布合成）；现在已换成 SVG
+     单层，只剩「重绘面积 +45%」这一项代价，比当时轻得多。 */
+  .avatar{width:min(440px,72vh,46vw);height:min(440px,72vh,46vw);border-radius:50%;
     position:relative;overflow:hidden;
     background:radial-gradient(circle at 50% 35%,#2b3d63,#141d30 72%);
     box-shadow:0 0 0 1px #2c3a56,0 20px 60px rgba(0,0,0,.6);
