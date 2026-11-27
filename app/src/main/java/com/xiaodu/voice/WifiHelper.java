@@ -108,6 +108,19 @@ public class WifiHelper {
             try { kicked = wm.startScan(); } catch (Throwable t) { Log.w(TAG, "startScan: " + t); }
 
             List<ScanResult> rs = wm.getScanResults();
+            /*
+             * startScan() 是异步的，紧接着读 getScanResults() 只会拿到上一轮的缓存
+             * （首次进入时就是空）。这里轮询等结果落地，最多 4 秒。
+             * 阻塞的是 WebView 的 JavaBridge 线程，不影响 UI 渲染。
+             */
+            if ((rs == null || rs.isEmpty()) && kicked) {
+                long deadline = System.currentTimeMillis() + 4000;
+                while (System.currentTimeMillis() < deadline) {
+                    try { Thread.sleep(250); } catch (InterruptedException e) { break; }
+                    rs = wm.getScanResults();
+                    if (rs != null && !rs.isEmpty()) break;
+                }
+            }
             if (rs == null) rs = new ArrayList<>();
 
             WifiInfo wi = wm.getConnectionInfo();
@@ -251,8 +264,10 @@ public class WifiHelper {
     private static String unquote(String s) {
         if (s == null) return "";
         if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
-            return s.substring(1, s.length() - 1);
+            s = s.substring(1, s.length() - 1);
         }
+        // 没有定位权限时 framework 会把 SSID 打码成这个字面量，别当成真名显示
+        if ("<unknown ssid>".equals(s) || "0x".equals(s)) return "";
         return s;
     }
 

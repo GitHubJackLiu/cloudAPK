@@ -335,9 +335,14 @@
     if (hasNative){
       try {
         var w = JSON.parse(window.Native.wifiStatus());
-        $('wifiSub').textContent = w.enabled
-          ? (w.ssid ? ('已连接 ' + w.ssid + (w.ip ? (' · ' + w.ip) : '')) : '已开启，未连接')
-          : '已关闭';
+        if (!w.enabled){
+          $('wifiSub').textContent = '已关闭';
+        } else if (w.ip){
+          // 没有定位权限时系统会把 SSID 打码成 <unknown ssid>，原生侧已过滤为空
+          $('wifiSub').textContent = '已连接' + (w.ssid ? ' ' + w.ssid : '') + ' · ' + w.ip;
+        } else {
+          $('wifiSub').textContent = '已开启，未连接';
+        }
         var n = JSON.parse(window.Native.getSysInfo());
         $('netInfo').textContent = 'MAC ' + (n.mac || '—') + ' · 型号 ' + (n.model || '—');
       } catch(e){

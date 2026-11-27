@@ -186,8 +186,8 @@
       $('list').innerHTML = '<div class="empty">Wi-Fi 关闭中，打开后点 ⟳ 扫描</div>';
       return;
     }
-    if (s.ssid){
-      $('curSsid').textContent = s.ssid;
+    if (s.ssid || s.ip){
+      $('curSsid').textContent = s.ssid || '当前网络';
       $('curMeta').textContent = (s.ip || '无 IP') + ' · ' + (s.rssi || 0) + ' dBm · '
         + (s.speed || 0) + ' Mbps';
       $('curBadge').className = 'badge';
@@ -237,7 +237,13 @@
       try { window.Native.requestLocation(); } catch(e){}
       return;
     }
+    // 原生扫描最长会阻塞 4 秒等结果落地（startScan 是异步的），
+    // 先让「扫描中…」渲染出来再调用，否则整页看起来像卡死
     $('list').innerHTML = '<div class="empty">扫描中…</div>';
+    setTimeout(function(){ doScan(showToast); }, 60);
+  }
+
+  function doScan(showToast){
     var r;
     try { r = JSON.parse(window.Native.wifiScan()); }
     catch(e){ r = { ok: false, err: String(e.message || e) }; }
