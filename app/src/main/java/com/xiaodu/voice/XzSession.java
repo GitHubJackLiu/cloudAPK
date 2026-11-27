@@ -58,6 +58,8 @@ public class XzSession {
     private byte[] aesKey = new byte[16];
     private String nonceHex = "";
     private long seq = 0;
+    private volatile int upCount = 0;      // 已发送上行帧数（诊断用）
+    private volatile int downCount = 0;    // 已收到下行帧数（诊断用）
 
     /** 下行 PCM 队列（UDP 线程 → 播放线程） */
     private final java.util.concurrent.LinkedBlockingQueue<byte[]> downQ =
@@ -443,9 +445,12 @@ public class XzSession {
                 }
                 byte[] plain = AesCtr.decrypt(aesKey, Arrays.copyOfRange(data, 0, 16),
                         Arrays.copyOfRange(data, 16, len));
-                byte[] pcm = OpusCodec.decode(plain, downRate, downRate * 60 / 1000);
+                // 解码器建在 16k，服务端 24k 编码的流直接解成 16k，
+                // 播放端 AudioTrack 与采集同为 16k，不需要重采样。
+                byte[] pcm = OpusCodec.decode(plain);
                 if (pcm != null) {
                     lastSeq = seq;
+                    downCount++;
                     if (downQ.offer(pcm)) { /* ok */ }
                     else downQ.poll();             // 拥塞丢最老的
                 }
@@ -496,35 +501,70 @@ public class XzSession {
     // ---------------- 上行 PCM ----------------
 
     /**
+     * 上行累积缓冲。
+     * AudioRecord.read() 只保证「不超过请求长度」，实际可能返回半帧甚至更少，
+     * 而 Opus 要求每次编码的采样数严格等于帧长（960）。所以这里必须自己
+     * 攒够一帧再编码，否则会出现编码失败或帧边界错位。
+     */
+    private final byte[] upBuf = new byte[XZ_UP_SAMPLES * 2 * 4];
+    private int upFill = 0;
+
+    /**
      * 采集回调：PCM16 → Opus → AES-CTR → UDP。
-     * 这一整段都在原生线程内闭环，不经过 JS/WebSocket，
-     * 保证 AEC 需要的采集时序不被跨进程中转打乱。
+     * 这一整段都在原生线程内闭环，不经过 JS/WebSocket。
      */
     private void onMicPcm(byte[] data, int len) {
         if (!running.get() || udp == null) return;
+        if (paused) {
+            // 半双工暂停期间丢弃积压，否则恢复开麦时会把 TTS 期间的
+            // 陈旧音频当成用户说话发上去。
+            upFill = 0;
+            return;
+        }
         try {
-            byte[] opus = OpusCodec.encode(data, XZ_UP_SAMPLES);
-            if (opus == null) return;
-            long s;
-            synchronized (lock) {
-                seq = (seq + 1) & 0xFFFFFFFFL;
-                s = seq;
+            int off = 0;
+            while (off < len) {
+                int room = upBuf.length - upFill;
+                int n = Math.min(room, len - off);
+                System.arraycopy(data, off, upBuf, upFill, n);
+                upFill += n;
+                off += n;
+                if (upFill >= XZ_UP_SAMPLES * 2) {
+                    sendUpstream(upBuf, XZ_UP_SAMPLES * 2);
+                    // 帧长固定，剩余不足一帧的留到下次
+                    upFill -= XZ_UP_SAMPLES * 2;
+                    if (upFill > 0) {
+                        System.arraycopy(upBuf, XZ_UP_SAMPLES * 2, upBuf, 0, upFill);
+                    }
+                }
             }
-            byte[] nonce = buildAudioNonce(nonceHex, opus.length, s);
-            byte[] body = AesCtr.encrypt(aesKey, nonce, opus);
-            byte[] packet = new byte[16 + body.length];
-            packet[0] = 0x01;
-            packet[1] = 0x00;
-            packet[2] = (byte) ((body.length >> 8) & 0xff);
-            packet[3] = (byte) (body.length & 0xff);
-            // ssrc(4) ts(4) 保持 0，服务端不校验
-            System.arraycopy(nonce, 0, packet, 0, 16);
-            System.arraycopy(body, 0, packet, 16, body.length);
-            udp.send(new DatagramPacket(packet, packet.length,
-                    InetAddress.getByName(udpServer), udpPort));
         } catch (Throwable t) {
             Log.w(TAG, "onMicPcm: " + t);
         }
+    }
+
+    /** 编码并发送一帧 */
+    private void sendUpstream(byte[] pcm, int len) throws Exception {
+        byte[] opus = OpusCodec.encode(pcm, XZ_UP_SAMPLES);
+        if (opus == null) return;
+        long s;
+        synchronized (lock) {
+            seq = (seq + 1) & 0xFFFFFFFFL;
+            s = seq;
+        }
+        byte[] nonce = buildAudioNonce(nonceHex, opus.length, s);
+        byte[] body = AesCtr.encrypt(aesKey, nonce, opus);
+        byte[] packet = new byte[16 + body.length];
+        packet[0] = 0x01;
+        packet[1] = 0x00;
+        packet[2] = (byte) ((body.length >> 8) & 0xff);
+        packet[3] = (byte) (body.length & 0xff);
+        // ssrc(4) ts(4) 保持 0，服务端不校验
+        System.arraycopy(nonce, 0, packet, 0, 16);
+        System.arraycopy(body, 0, packet, 16, body.length);
+        udp.send(new DatagramPacket(packet, packet.length,
+                InetAddress.getByName(udpServer), udpPort));
+        upCount++;
     }
 
     // ---------------- 工具 ----------------

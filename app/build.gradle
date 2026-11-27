@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'com.xiaodu.voice'
     compileSdk 34
+    ndkVersion '25.1.8937393'
 
     defaultConfig {
         applicationId 'com.xiaodu.voice'
@@ -12,6 +13,27 @@ android {
         targetSdk 34
         versionCode 1
         versionName '1.0'
+
+        // 小度 1C 是纯 32 位设备，只编 armeabi-v7a，
+        // 避免把 opus 多编几档白白撑大 APK。
+        ndk {
+            abiFilters 'armeabi-v7a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // 只要纯 C 路径，不引入 libc++ 依赖。
+                arguments '-DANDROID_STL=none'
+                cFlags '-O3'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
     }
 
     buildTypes {

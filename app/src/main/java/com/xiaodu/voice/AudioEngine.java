@@ -66,9 +66,24 @@ public class AudioEngine {
     private volatile boolean prefSpeaker;       // 把下行 track 钉在内置扬声器
     private volatile int muted;             // 1=暂停上行（半双工）
     private volatile int level;             // 采集电平 0~100
-    private int captureSource = SRC_VOICE_COMM;
-    private int playUsage = USE_VOICE_COMM;
-    private int audioMode = MODE_COMM;
+
+    /*
+     * 默认通路：VOICE_RECOGNITION 采集 + MEDIA 播放 + NORMAL 模式。
+     *
+     * 为什么不用 AEC 那套（VOICE_COMMUNICATION + COMM）：
+     *   实测该组合会被 HAL 送进语音通话场景，但播放侧从不进
+     *   ...WithSphEn 通路，回声参考拿不到，AEC 实际不工作；
+     *   而 CALL 模式下噪声门会把静音压到数字零（-120dBFS），
+     *   对 ASR 反而不友好。
+     *   VOICE_RECOGNITION 是平台专门为语音识别准备的输入源，
+     *   会带单麦降噪；播放走 MEDIA 保证扬声器音量正常。
+     *
+     * 半双工（默认）下 TTS 期间会 setMuted(true) 停上行，
+     * 本来就不需要回声消除。
+     */
+    private int captureSource = SRC_VOICE_RECOG;
+    private int playUsage = USE_MEDIA;
+    private int audioMode = MODE_NORMAL;
     private int speakerGain = 80;
 
     /** 上行 PCM 回调（原始 16-bit 小端，16k 单声道） */
