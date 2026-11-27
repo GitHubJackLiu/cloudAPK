@@ -457,8 +457,10 @@ public class MainActivity extends Activity {
             //       --es me "我这边说的话" --es ai "小智回复的话"
             String me = intent.getStringExtra("me");
             String ai = intent.getStringExtra("ai");
+            String emo = intent.getStringExtra("emo");
             if (me != null) bridge.emit("stt", "{\"text\":\"" + esc(me) + "\"}");
             if (ai != null) bridge.emit("tts", "{\"state\":\"sentence_start\",\"text\":\"" + esc(ai) + "\"}");
+            if (emo != null) bridge.emit("llm", "{\"emotion\":\"" + esc(emo) + "\",\"text\":\"\"}");
             return;
         } else {
             return;
