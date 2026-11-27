@@ -44,11 +44,17 @@
     border:0;background:#0b0e14;z-index:40;display:none}
   #shell.on{display:block}
 
-  .talk{position:absolute;left:20px;top:58px;width:min(304px,32vw);max-height:47%;
+  /* 对话分两列：小智说在左、我说在右。
+     以前只有一个左列，我自己的识别结果也挤在头像左边，看起来像别人说的话。
+     右列从 top:72 起，避开右上角齿轮（y 14~60）；max-height 47%≈264px，
+     下沿约 336px，远高于右下角通话按钮（上沿约 412px），不会叠在一起。 */
+  .talk{position:absolute;width:min(304px,32vw);max-height:47%;
     overflow-y:auto;overflow-x:hidden;padding:2px 2px 4px;z-index:6;
-    display:flex;flex-direction:column;gap:9px;justify-content:flex-end;
+    display:flex;flex-direction:column;gap:9px;
     scrollbar-width:none}
   .talk::-webkit-scrollbar{display:none}
+  .talk-l{left:20px;top:58px;align-items:flex-start}
+  .talk-r{right:20px;top:72px;align-items:flex-end}
 
   .hero{position:absolute;top:0;right:0;bottom:0;left:0;
     display:flex;align-items:center;justify-content:center}
@@ -153,7 +159,8 @@
   <button class="hud hud-tr" id="gear" aria-label="设置">⚙</button>
 
   <div class="stage" id="stage">
-    <div class="talk" id="talk"></div>
+    <div class="talk talk-l" id="talkL"></div>
+    <div class="talk talk-r" id="talkR"></div>
     <div class="hero">
       <div class="avatar"><div id="lottieBox"></div></div>
       <div class="callwrap">
@@ -205,7 +212,8 @@
 <script>
 (function(){
   var $ = function(id){ return document.getElementById(id); };
-  var dot = $('dot'), chipMode = $('chipMode'), talk = $('talk'), lvl = $('lvl'),
+  var dot = $('dot'), chipMode = $('chipMode'), talkL = $('talkL'), talkR = $('talkR'),
+      lvl = $('lvl'),
       btn = $('btn'), gear = $('gear'), stage = $('stage'),
       act = $('act'), actCode = $('actCode'), actSub = $('actSub'),
       noteEl = $('note'), statusBox = $('statusBox'), callLabel = $('callLabel'),
@@ -310,9 +318,11 @@
     var d = document.createElement('div');
     d.className = 'msg ' + (cls || 'sys');
     d.textContent = text;
-    talk.appendChild(d);
-    talk.scrollTop = talk.scrollHeight;
-    while (talk.children.length > 40) talk.removeChild(talk.firstChild);
+    // 两列各自独立滚动：我自己的话进右列，小智的话和系统提示留在左列
+    var box = (cls === 'me') ? talkR : talkL;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    while (box.children.length > 40) box.removeChild(box.firstChild);
   }
   function note(text){ noteEl.textContent = text || ''; }
   function setMode(text, cls){
