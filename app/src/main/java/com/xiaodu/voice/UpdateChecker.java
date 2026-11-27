@@ -246,15 +246,19 @@ public class UpdateChecker {
                 return out;
             }
 
+            // 拉起必须在 pm install 之前排队：
+            // pm install -r 覆盖安装会立刻杀掉本进程（codePath changed），
+            // install 之后的代码全是死代码，restartApp 放后面永远不执行。
+            // 先用 setsid 排一条独立的延迟 am start，即使本进程马上被杀，
+            // 这条命令也能在 8 秒后（安装早已完成）把新版本拉回前台。
+            restartApp();
+
             String res = su("pm install -r " + path);
             Log.i(TAG, "pm install: " + clip(res, 200));
             boolean ok = res != null && res.toLowerCase().contains("success");
             put(out, "ok", ok);
             put(out, "installed", ok);
             if (!ok) put(out, "err", "install: " + clip(res, 160));
-
-            // 装成功就拉起新版本（launchMode=singleTask，startActivity 会复用栈顶）
-            if (ok) restartApp();
             return out;
         } catch (Throwable t) {
             put(out, "ok", false);
@@ -326,10 +330,10 @@ public class UpdateChecker {
             // 这样 App 进程被覆盖安装终止时，这条命令仍能独立跑完。
             Process p = Runtime.getRuntime().exec(new String[]{
                     "su", "-c", "/system/bin/setsid /system/bin/sh -c "
-                            + "'sleep 4; am start -n com.xiaodu.voice/.MainActivity' "
+                            + "'sleep 8; am start -n com.xiaodu.voice/.MainActivity' "
                             + "</dev/null >/dev/null 2>&1 &"});
-            // 不 waitFor：本进程即将被覆盖安装终止，等不到结果。
-            Log.i(TAG, "restart detached issued");
+            // 不 waitFor：本进程马上会被 pm install 杀掉，等不到结果。
+            Log.i(TAG, "restart queued before install");
         } catch (Throwable t) {
             Log.w(TAG, "restart failed: " + t);
         }
