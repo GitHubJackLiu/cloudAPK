@@ -105,6 +105,23 @@ public class XzSession {
 
     public void stop() {
         if (!running.compareAndSet(true, false)) return;
+        cleanup();
+        emit("session", "{\"state\":\"stopped\"}");
+    }
+
+    /**
+     * 释放所有会话资源。
+     *
+     * 三处容易漏的关键点：
+     *   1) 必须停音频引擎 —— 只关 MQTT/UDP 的话麦克风还开着，
+     *      用户以为挂断了其实还在录，也会一直占着 AudioRecord 让
+     *      HAL 认为语音通路在用。
+     *   2) udpServer 必须置空 —— 否则第二次点「通话」时 run() 里的
+     *      `while (udpServer == null)` 立即通过，拿上一轮的旧地址发音频，
+     *      服务端那边早就换了 session，于是上行石沉大海。
+     *   3) upFill / paused / armed 复位，避免带着上一轮的半帧和陈旧状态重连。
+     */
+    private void cleanup() {
         try {
             if (mqtt != null) {
                 mqtt.disconnect();
@@ -118,6 +135,29 @@ public class XzSession {
             }
         } catch (Throwable ignored) { }
         downQ.clear();
+        try { audio.stop(); } catch (Throwable ignored) { }
+        paused = false;
+        armed = false;
+        upFill = 0;
+        udpServer = null;
+        udpPort = 0;
+        sessionId = "";
+        seq = 0;
+    }
+
+    /**
+     * 会话失败后的收尾：必须把 running 置回 false，
+     * 否则 Bridge 再调 start() 会被 compareAndSet 挡掉，
+     * 表现就是「挂断后再点通话没有任何反应」。
+     */
+    private void fail(String msg) {
+        boolean active = running.get();
+        running.set(false);
+        if (!active) return;                    // 用户已经主动挂断，不再报错
+        Log.w(TAG, "session fail: " + msg);
+        emit("error", "{\"text\":\"" + msg.replace('"', '\'') + "\"}");
+        cleanup();
+        emit("session", "{\"state\":\"failed\"}");
     }
 
     // ---------------- 主流程 ----------------
@@ -127,12 +167,12 @@ public class XzSession {
             emit("net", "{\"text\":\"正在请求 OTA…\"}");
             JSONObject ota = otaReady();
             if (ota == null) {
-                emit("error", "{\"text\":\"OTA 失败\"}");
+                fail("OTA 失败");
                 return;
             }
             JSONObject mq = ota.optJSONObject("mqtt");
             if (mq == null || mq.optString("client_id").isEmpty()) {
-                emit("error", "{\"text\":\"服务端没下发 MQTT 配置\"}");
+                fail("服务端没下发 MQTT 配置");
                 return;
             }
             String publishTopic = mq.optString("publish_topic", "device-server");
@@ -146,7 +186,7 @@ public class XzSession {
                     mq.optString("password"),
                     this::onMqttJson);
             if (!mqtt.connect()) {
-                emit("error", "{\"text\":\"MQTT 连接失败\"}");
+                fail("MQTT 连接失败");
                 return;
             }
 
@@ -168,37 +208,31 @@ public class XzSession {
             // 等服务端回 hello（带 udp 参数）
             long deadline = System.currentTimeMillis() + 12000;
             while (System.currentTimeMillis() < deadline && udpServer == null) {
+                if (!running.get()) return;              // 等待途中被挂断
                 Thread.sleep(100);
             }
             if (udpServer == null) {
-                emit("error", "{\"text\":\"音频通道协商超时\"}");
+                fail("音频通道协商超时");
                 return;
             }
 
             // UDP 音频面
             udp = new DatagramSocket();
             new Thread(this::udpRx, "xz-udp-rx").start();
-            new Thread(this::udpTx, "xz-udp-tx").start();
             new Thread(this::dbgLoop, "xz-dbg").start();
 
             // 采集
             if (!audio.start()) {
-                emit("error", "{\"text\":\"音频启动失败\"}");
+                fail("音频启动失败");
                 return;
             }
-            // 自检音：确认「引擎 track → 扬声器」这条物理通路本身是通的。
-            // 诊断期保留，跑通后删掉。
-            new Thread(() -> {
-                try { Thread.sleep(600); } catch (InterruptedException ignored) { }
-                audio.playToneOnEngineTrack(1000, 300, 9000);
-            }, "xz-beep").start();
             armed = true;
             sendListen("start");
             emit("ready", "{\"mode\":\"xiaozhi\",\"downRate\":" + downRate + "}");
+            emit("session", "{\"state\":\"started\"}");
         } catch (Throwable t) {
             Log.e(TAG, "session failed", t);
-            emit("error", "{\"text\":\"" + t.getClass().getSimpleName() + ": "
-                    + String.valueOf(t.getMessage()).replace('"', '\'') + "\"}");
+            fail(t.getClass().getSimpleName() + ": " + t.getMessage());
         }
     }
 
@@ -520,9 +554,13 @@ public class XzSession {
 
     /** 每 2 秒把链路各段计数打一遍，定位「包到没到/解码成不成/写没写进去」 */
     private void dbgLoop() {
+        int prevOk = -1;
         while (running.get()) {
             try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
             if (!running.get()) break;
+            // 空闲时不刷日志，只在计数变化时打，避免把 logcat 淹掉
+            if (rxOk == prevOk) continue;
+            prevOk = rxOk;
             Log.i(TAG, "dbg udp=" + rxTotal + " dropType=" + rxCandDrop
                     + "/" + rxBadType + " badLen=" + rxBadLen + " dup=" + rxSeqDrop
                     + " decNull=" + rxDecNull + " opNull=" + rxOpNull
@@ -530,19 +568,6 @@ public class XzSession {
                     + " q=" + downQ.size() + " wrBlk=" + audio.getWrittenBlocks()
                     + " wrKB=" + (audio.getWrittenBytes() / 1024)
                     + " lastN=" + OpusCodec.lastSamples);
-        }
-    }
-
-    private void udpTx() {
-        while (running.get() && udp != null) {
-            try {
-                // 上行音频由 onMicPcm 回调直接编码发送（见 sendUpstream），
-                // 这里只做保活与异常检查，避免另开一条取帧通道造成时序错乱。
-                Thread.sleep(20);
-            } catch (Throwable t) {
-                if (!running.get()) break;
-                Log.w(TAG, "udpTx: " + t);
-            }
         }
     }
 

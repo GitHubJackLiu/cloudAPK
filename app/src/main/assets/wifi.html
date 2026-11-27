@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wi-Fi</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#0b0e14;color:#e6e9ef;
+    font-family:-apple-system,"Noto Sans SC",sans-serif}
+  body{overflow-y:auto;font-size:15px}
+  .top{position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:10px;
+    padding:10px 16px;background:rgba(18,22,31,.94);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border-bottom:1px solid #1d2331}
+  .top h1{margin:0;font-size:17px;font-weight:600;flex:1;letter-spacing:.3px}
+  .back{height:44px;padding:0 16px;border-radius:12px;background:#1b2130;border:0;
+    color:#c9d2e3;font-size:15px}
+  .re{height:44px;width:44px;border-radius:12px;background:#16233c;border:1px solid #33507e;
+    color:#8fb6ff;font-size:19px;line-height:42px;text-align:center;padding:0}
+  .body{padding:14px 16px 40px;max-width:860px;margin:0 auto}
+
+  .card{background:#12161f;border:1px solid #1d2331;border-radius:16px;
+    padding:16px 18px;margin-bottom:13px}
+  .card h2{margin:0 0 10px;font-size:13px;color:#7d879c;font-weight:600;
+    letter-spacing:.9px;text-transform:uppercase}
+  .now{display:flex;align-items:center;gap:14px}
+  .now .big{flex:1;min-width:0}
+  .now .ssid{font-size:19px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .now .meta{margin-top:5px;font-size:12.5px;color:#616b80;
+    font-family:ui-monospace,Menlo,monospace}
+  .badge{font-size:11.5px;padding:4px 10px;border-radius:9px;background:#17301f;
+    color:#5ad48b;border:1px solid #2c5a3f;white-space:nowrap}
+  .badge.off{background:#2a1b1b;color:#f0a0a0;border-color:#6a3535}
+
+  .sw{position:relative;width:60px;height:34px;border-radius:17px;background:#242c3c;
+    border:0;flex:0 0 60px;transition:background .18s}
+  .sw i{position:absolute;top:3px;left:3px;width:28px;height:28px;border-radius:50%;
+    background:#6b7690;transition:.18s}
+  .sw.on{background:#17301f}
+  .sw.on i{left:29px;background:#5ad48b}
+
+  .list{margin-top:4px}
+  .ap{display:flex;align-items:center;gap:13px;padding:13px 4px;
+    border-top:1px solid rgba(29,35,49,.8)}
+  .ap:first-child{border-top:0}
+  .sig{display:flex;align-items:flex-end;gap:2px;height:18px;width:22px;flex:0 0 22px}
+  .sig i{width:4px;border-radius:1px;background:#39445a}
+  .sig i:nth-child(1){height:6px}
+  .sig i:nth-child(2){height:10px}
+  .sig i:nth-child(3){height:14px}
+  .sig i:nth-child(4){height:18px}
+  .sig i.on{background:#5ad48b}
+  .sig i.on.low{background:#f2c14e}
+  .ap .nm{flex:1;min-width:0}
+  .ap .nm .s{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ap .nm .m{font-size:11.5px;color:#5c6579;margin-top:3px}
+  .lockico{color:#5c6579;font-size:14px}
+  .cur{color:#5ad48b;font-size:12px}
+
+  .empty{padding:22px 4px;text-align:center;font-size:13px;color:#616b80;line-height:1.8}
+  .hint{margin:10px 0 0;font-size:12.5px;line-height:1.65;color:#616b80}
+  .hint b{color:#f2c14e;font-weight:600}
+  .btn{height:44px;border-radius:12px;border:1px solid #2b3446;background:#161c28;
+    color:#c9d2e3;font-size:14px;padding:0 16px}
+  .btn.p{background:#16233c;border-color:#33507e;color:#8fb6ff}
+  .btn.g{background:#17301f;border-color:#3fa96b;color:#5ad48b;font-weight:600}
+  .btn:active{opacity:.8}
+
+  /* 密码弹层 */
+  #pwd{position:fixed;inset:0;z-index:120;display:none;align-items:center;
+    justify-content:center;padding:24px;background:rgba(6,9,14,.86)}
+  #pwd.show{display:flex}
+  .pcard{width:100%;max-width:420px;background:#12161f;border:1px solid #253046;
+    border-radius:18px;padding:20px}
+  .pttl{font-size:17px;font-weight:600}
+  .psub{margin-top:6px;font-size:12.5px;color:#616b80}
+  .prow{margin-top:16px;display:flex;gap:9px}
+  input[type=password],input[type=text]{width:100%;height:48px;border-radius:12px;
+    border:1px solid #262e40;background:#0e131c;color:#e6e9ef;padding:0 14px;
+    font-size:15px;font-family:ui-monospace,Menlo,monospace}
+  input:focus{outline:0;border-color:#3a4a68}
+  .pbtns{margin-top:18px;display:flex;gap:10px}
+  .pbtns .btn{flex:1}
+  .pmsg{margin-top:12px;font-size:12.5px;color:#f0a0a0;min-height:17px}
+
+  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+    background:#17301f;color:#5ad48b;font-size:14px;padding:10px 18px;border-radius:11px;
+    opacity:0;transition:.22s;pointer-events:none;z-index:220}
+  #toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="top">
+  <button class="back" id="back">← 返回</button>
+  <h1>Wi-Fi</h1>
+  <button class="re" id="refresh" aria-label="刷新">⟳</button>
+</div>
+
+<div class="body">
+  <div class="card">
+    <h2>当前网络</h2>
+    <div class="now">
+      <div class="big">
+        <div class="ssid" id="curSsid">—</div>
+        <div class="meta" id="curMeta">读取中…</div>
+      </div>
+      <span class="badge off" id="curBadge">未连接</span>
+      <button class="sw" id="wifiSw"><i></i></button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>可用网络</h2>
+    <div class="list" id="list">
+      <div class="empty">点右上角 ⟳ 扫描</div>
+    </div>
+    <p class="hint">扫描需要<b>定位权限</b>，且系统的「位置信息」总开关要打开——这是 Android 8
+      的硬性要求（扫描结果可用于推断位置）。</p>
+  </div>
+
+  <div class="card">
+    <h2>手动添加（隐藏网络）</h2>
+    <div class="prow" style="margin-top:0">
+      <input type="text" id="manualSsid" placeholder="输入 Wi-Fi 名称">
+      <button class="btn p" id="manualGo">连接</button>
+    </div>
+  </div>
+</div>
+
+<div id="pwd">
+  <div class="pcard">
+    <div class="pttl" id="pTitle">连接 Wi-Fi</div>
+    <div class="psub" id="pSub"></div>
+    <div class="prow">
+      <input type="password" id="pInput" placeholder="输入密码">
+      <button class="btn" id="pEye" style="width:52px;padding:0">👁</button>
+    </div>
+    <div class="pmsg" id="pMsg"></div>
+    <div class="pbtns">
+      <button class="btn" id="pCancel">取消</button>
+      <button class="btn g" id="pOk">连接</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var hasNative = (typeof window.Native !== 'undefined');
+  var pendingSsid = '';
+
+  function toast(t){
+    var el = $('toast');
+    el.textContent = t; el.className = 'show';
+    clearTimeout(el._t); el._t = setTimeout(function(){ el.className = ''; }, 1800);
+  }
+
+  function sigBars(n){
+    var h = '';
+    for (var i = 1; i <= 4; i++){
+      var on = i <= n;
+      var cls = 'on' + (on && n <= 1 ? ' low' : '');
+      h += '<i class="' + (on ? cls : '') + '"></i>';
+    }
+    return h;
+  }
+
+  function status(){
+    if (!hasNative) return null;
+    try { return JSON.parse(window.Native.wifiStatus()); } catch(e){ return null; }
+  }
+
+  function paintStatus(){
+    var s = status();
+    if (!s){ $('curMeta').textContent = '无法读取'; return; }
+    $('wifiSw').className = 'sw' + (s.enabled ? ' on' : '');
+    if (!s.enabled){
+      $('curSsid').textContent = 'Wi-Fi 已关闭';
+      $('curMeta').textContent = '';
+      $('curBadge').className = 'badge off';
+      $('curBadge').textContent = '关闭';
+      $('list').innerHTML = '<div class="empty">Wi-Fi 关闭中，打开后点 ⟳ 扫描</div>';
+      return;
+    }
+    if (s.ssid){
+      $('curSsid').textContent = s.ssid;
+      $('curMeta').textContent = (s.ip || '无 IP') + ' · ' + (s.rssi || 0) + ' dBm · '
+        + (s.speed || 0) + ' Mbps';
+      $('curBadge').className = 'badge';
+      $('curBadge').textContent = s.ip ? '已连接' : '连接中';
+    } else {
+      $('curSsid').textContent = '未连接';
+      $('curMeta').textContent = 'MAC ' + (s.mac || '—');
+      $('curBadge').className = 'badge off';
+      $('curBadge').textContent = '未连接';
+    }
+  }
+
+  function openPwd(ssid, secured){
+    pendingSsid = ssid;
+    $('pTitle').textContent = secured ? '输入密码' : '连接到 ' + ssid;
+    $('pSub').textContent = ssid;
+    $('pMsg').textContent = '';
+    $('pInput').value = '';
+    $('pInput').type = secured ? 'password' : 'text';
+    $('pInput').placeholder = secured ? 'Wi-Fi 密码' : '开放网络，无需密码';
+    $('pwd').classList.add('show');
+    $('pInput').disabled = !secured;
+    if (secured) setTimeout(function(){ $('pInput').focus(); }, 120);
+  }
+
+  function doConnect(ssid, pwd){
+    if (!hasNative){ toast('需要原生环境'); return; }
+    $('pOk').disabled = true;
+    $('pMsg').textContent = '正在连接…';
+    var r;
+    try { r = JSON.parse(window.Native.wifiConnect(ssid, pwd || '')); }
+    catch(e){ r = { ok: false, err: String(e.message || e) }; }
+    $('pOk').disabled = false;
+    if (!r.ok){
+      $('pMsg').textContent = r.err || '连接失败';
+      return;
+    }
+    $('pwd').classList.remove('show');
+    toast('已提交连接，稍候查看状态');
+    setTimeout(function(){ paintStatus(); scan(false); }, 2500);
+  }
+
+  function scan(showToast){
+    if (!hasNative){ $('list').innerHTML = '<div class="empty">需要原生环境</div>'; return; }
+    if (!window.Native.hasLocation()){
+      $('list').innerHTML = '<div class="empty">正在申请定位权限…</div>';
+      try { window.Native.requestLocation(); } catch(e){}
+      return;
+    }
+    $('list').innerHTML = '<div class="empty">扫描中…</div>';
+    var r;
+    try { r = JSON.parse(window.Native.wifiScan()); }
+    catch(e){ r = { ok: false, err: String(e.message || e) }; }
+
+    if (r.off){
+      $('list').innerHTML = '<div class="empty">Wi-Fi 处于关闭状态</div>';
+      paintStatus();
+      return;
+    }
+    if (!r.ok || !r.list || !r.list.length){
+      $('list').innerHTML = '<div class="empty">' + (r.err || '没有扫到网络') + '</div>';
+      if (showToast) toast(r.err || '没有扫到网络');
+      return;
+    }
+
+    var h = '';
+    r.list.forEach(function(a){
+      h += '<div class="ap" data-ssid="' + esc(a.ssid) + '" data-sec="' + (a.secured?1:0) + '">'
+        + '<div class="sig">' + sigBars(a.bars) + '</div>'
+        + '<div class="nm"><div class="s">' + esc(a.ssid)
+        + (a.current ? ' <span class="cur">· 当前</span>' : '') + '</div>'
+        + '<div class="m">' + (a.rssi) + ' dBm' + (a.freq ? ' · ' + a.freq + 'MHz' : '') + '</div></div>'
+        + (a.secured ? '<span class="lockico">🔒</span>' : '')
+        + '</div>';
+    });
+    $('list').innerHTML = h;
+
+    Array.prototype.forEach.call($('list').querySelectorAll('.ap'), function(el){
+      el.onclick = function(){
+        openPwd(el.dataset.ssid, el.dataset.sec === '1');
+      };
+    });
+    if (showToast) toast('扫到 ' + r.list.length + ' 个网络');
+  }
+
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // -------- 交互 --------
+  $('back').onclick = function(){ location.href = 'settings.html'; };
+  $('refresh').onclick = function(){ paintStatus(); scan(true); };
+  $('wifiSw').onclick = function(){
+    if (!hasNative) return;
+    var s = status();
+    var next = !(s && s.enabled);
+    try { window.Native.setWifiEnabled(next); } catch(e){}
+    toast(next ? '正在打开 Wi-Fi…' : '正在关闭 Wi-Fi…');
+    setTimeout(function(){ paintStatus(); if (next) scan(false); }, 2000);
+  };
+
+  $('pCancel').onclick = function(){ $('pwd').classList.remove('show'); };
+  $('pEye').onclick = function(){
+    var el = $('pInput');
+    el.type = el.type === 'password' ? 'text' : 'password';
+  };
+  $('pOk').onclick = function(){ doConnect(pendingSsid, $('pInput').value); };
+  $('pInput').addEventListener('keydown', function(e){
+    if (e.key === 'Enter') doConnect(pendingSsid, $('pInput').value);
+  });
+  $('manualGo').onclick = function(){
+    var s = $('manualSsid').value.trim();
+    if (!s){ toast('先输入网络名称'); return; }
+    openPwd(s, true);
+  };
+
+  // 原生权限回调
+  window.onNativeEvent = function(type, payload){
+    if (type !== 'permission') return;
+    if (payload && payload.loc === true) scan(false);
+    else if (payload && payload.loc === false){
+      $('list').innerHTML = '<div class="empty">没有定位权限，无法扫描。<br>'
+        + '请到系统设置里给本应用开启定位权限</div>';
+    }
+  };
+
+  paintStatus();
+  // 初始化时先确认权限，再自动扫一次
+  if (hasNative){
+    if (window.Native.hasLocation()) scan(false);
+    else { try { window.Native.requestLocation(); } catch(e){} }
+  }
+  // 状态轮询（连接需要几秒才建立）
+  setInterval(paintStatus, 2500);
+})();
+</script>
+</body>
+</html>

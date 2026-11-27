@@ -86,7 +86,6 @@ public class AudioEngine {
     private int captureSource = SRC_VOICE_RECOG;
     private int playUsage = USE_MEDIA;
     private int audioMode = MODE_NORMAL;
-    private int speakerGain = 80;
 
     /** 上行 PCM 回调（原始 16-bit 小端，16k 单声道） */
     public interface PcmSink {
@@ -107,7 +106,6 @@ public class AudioEngine {
 
     public void setSink(PcmSink s) { this.sink = s; }
     public void setSource(PcmSource s) { this.source = s; }
-    public void setSpeakerGain(int pct) { this.speakerGain = Math.max(0, Math.min(100, pct)); }
 
     /** AEC 实验期间独占采集通道 */
     public void setExclusive(boolean e) { this.exclusive = e; }

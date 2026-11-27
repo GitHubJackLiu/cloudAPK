@@ -41,14 +41,17 @@ public class Bridge {
     private final Settings settings;
     private final AudioEngine audio;
     private final AecTester aec;
+    private final WifiHelper wifi;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private AecModeTester aecMode;
 
-    public Bridge(MainActivity act, Settings settings, AudioEngine audio, AecTester aec) {
+    public Bridge(MainActivity act, Settings settings, AudioEngine audio, AecTester aec,
+                  WifiHelper wifi) {
         this.act = act;
         this.settings = settings;
         this.audio = audio;
         this.aec = aec;
+        this.wifi = wifi;
     }
 
     public void setAecModeTester(AecModeTester t) { this.aecMode = t; }
@@ -98,7 +101,8 @@ public class Bridge {
             o.put("xiaozhi", xz);
 
             JSONObject au = new JSONObject();
-            au.put("volume", settings.getVolume());
+            // 音量以系统 STREAM_MUSIC 为真源，配置里的旧值只作兜底
+            au.put("volume", act.getVolumePct());
             au.put("micGain", settings.getMicGain());
             au.put("jitterMs", settings.getJitterMs());
             o.put("audio", au);
@@ -130,14 +134,14 @@ public class Bridge {
             }
             if (o.has("audio")) {
                 JSONObject au = o.getJSONObject("audio");
-                if (au.has("volume")) settings.setVolume(au.optInt("volume"));
+                if (au.has("volume")) act.setVolumePct(au.optInt("volume"));
                 if (au.has("micGain")) settings.setMicGain((float) au.optDouble("micGain"));
                 if (au.has("jitterMs")) settings.setJitterMs(au.optInt("jitterMs"));
             }
             if (o.has("ui")) {
                 JSONObject u = o.getJSONObject("ui");
                 if (u.has("mode")) settings.setUiMode(u.optString("mode"));
-                if (u.has("dim")) settings.setDim(u.optInt("dim"));
+                if (u.has("dim")) act.applyBrightness(u.optInt("dim"));
                 if (u.has("wakeLock")) settings.setWakeLock(u.optBoolean("wakeLock"));
                 if (u.has("showDebug")) settings.setShowDebug(u.optBoolean("showDebug"));
             }
@@ -181,6 +185,66 @@ public class Bridge {
     @JavascriptInterface
     public void back() {
         act.goHome();
+    }
+
+    // ---------------- 音量 / 亮度 ----------------
+
+    /** 系统媒体音量百分比（0~100），与设置页滑块同一真源 */
+    @JavascriptInterface
+    public int getVolume() {
+        return act.getVolumePct();
+    }
+
+    @JavascriptInterface
+    public void setVolume(int pct) {
+        act.setVolumePct(pct);
+    }
+
+    @JavascriptInterface
+    public void setBrightness(int pct) {
+        settings.setDim(Math.max(4, Math.min(100, pct)));
+        act.applyBrightness(pct);
+    }
+
+    // ---------------- Wi-Fi ----------------
+
+    @JavascriptInterface
+    public String wifiStatus() {
+        return wifi.status();
+    }
+
+    @JavascriptInterface
+    public String wifiScan() {
+        return wifi.scan();
+    }
+
+    @JavascriptInterface
+    public String wifiConnect(String ssid, String pwd) {
+        return wifi.connect(ssid, pwd);
+    }
+
+    @JavascriptInterface
+    public boolean wifiEnabled() {
+        try {
+            return wifi.status().contains("\"enabled\":true");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @JavascriptInterface
+    public boolean setWifiEnabled(boolean on) {
+        return wifi.setEnabled(on);
+    }
+
+    @JavascriptInterface
+    public void requestLocation() {
+        act.requestLocationPermission();
+    }
+
+    @JavascriptInterface
+    public boolean hasLocation() {
+        return act.hasLocationPermission();
     }
 
     @JavascriptInterface

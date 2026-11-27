@@ -51,9 +51,11 @@ public class MainActivity extends Activity {
     private AecModeTester aecMode;
     private Bridge bridge;
     private XzSession session;
+    private WifiHelper wifi;
     private WebViewClient webClient;
     private boolean pageReady = false;
     private String pendingCmd = null;
+    private boolean pendingStart = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,6 +67,7 @@ public class MainActivity extends Activity {
         aec = new AecTester(audio, am);
         aecMode = new AecModeTester(audio);
         session = new XzSession(this, settings, audio);
+        wifi = new WifiHelper(this);
 
         FrameLayout root = new FrameLayout(this);
         webView = new WebView(this);
@@ -117,7 +120,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        bridge = new Bridge(this, settings, audio, aec);
+        bridge = new Bridge(this, settings, audio, aec, wifi);
         bridge.setAecModeTester(aecMode);
         session.setBridge(bridge);
         webView.addJavascriptInterface(bridge, "Native");
@@ -127,11 +130,64 @@ public class MainActivity extends Activity {
 
         webView.loadUrl("file:///android_asset/index.html");
         applyImmersive();
+        applyBrightness(settings.getDim());
         ensurePermissions();
-        // Phase 1（AEC 通路验证）：音频协议尚未接通（Opus 未链接），
-        // 不自动拉起小智会话，避免验证码面板干扰 AEC 实验。
-        // Phase 2 接通后改为 session.start()。
-        session.startIfReady();
+        // 默认不自动通话：等用户在界面上点「通话」。
+        // 以前这里是 session.startIfReady()，结果是开机就占麦克风、
+        // 而且一进桌面就跳出激活码面板。
+    }
+
+    // ---------------- 音量 / 亮度（走系统接口，不用遮罩层） ----------------
+
+    /**
+     * 屏幕亮度。
+     *
+     * 用窗口级 screenBrightness 而不是 Settings.System.SCREEN_BRIGHTNESS：
+     *   · 前者不需要 WRITE_SETTINGS 权限，也能立即生效；
+     *   · 作用域只在本 Activity，退出应用自动恢复系统亮度，
+     *     不会把用户设备的全局亮度改掉。
+     * 取值范围 0.0~1.0，-1 表示跟随系统。
+     */
+    public void applyBrightness(int pct) {
+        try {
+            float v = Math.max(0.04f, Math.min(1f, pct / 100f));
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.screenBrightness = v;
+            getWindow().setAttributes(lp);
+        } catch (Throwable t) {
+            Log.w(TAG, "applyBrightness failed: " + t);
+        }
+    }
+
+    /** 系统媒体音量百分比 */
+    public int getVolumePct() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int cur = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+            return max <= 0 ? 0 : Math.round(cur * 100f / max);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * 设置系统媒体音量。
+     *
+     * 以前「应用音量」滑块只写进配置、AudioEngine 里根本没有用它，
+     * 属于假控件。这里直接改 STREAM_MUSIC，拖动立刻能听出变化。
+     * flags=0：不加 FLAG_SHOW_UI，避免系统弹音量条盖住界面。
+     */
+    public void setVolumePct(int pct) {
+        try {
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int idx = Math.round(Math.max(0, Math.min(100, pct)) / 100f * max);
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, Math.max(0, Math.min(max, idx)), 0);
+            settings.setVolume(pct);
+        } catch (Throwable t) {
+            Log.w(TAG, "setVolumePct failed: " + t);
+        }
     }
 
     // ---------------- 全屏 ----------------
@@ -178,6 +234,35 @@ public class MainActivity extends Activity {
             boolean all = true;
             for (int g : grant) if (g != PackageManager.PERMISSION_GRANTED) all = false;
             bridge.emit("permission", all ? "{\"ok\":true}" : "{\"ok\":false}");
+            if (all && pendingStart) {
+                pendingStart = false;
+                session.start();
+            } else if (!all) {
+                pendingStart = false;
+            }
+        } else if (code == 2) {
+            boolean ok = hasLocationPermission();
+            bridge.emit("permission", "{\"loc\":" + ok + "}");
+        }
+    }
+
+    /** 扫描 Wi-Fi 列表需要定位权限（API 23 起把 scan 结果当位置数据管） */
+    public boolean hasLocationPermission() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** 供 Wi-Fi 页面在扫描前主动申请；结果通过 permission 事件回传 */
+    public void requestLocationPermission() {
+        if (hasLocationPermission()) {
+            bridge.emit("permission", "{\"loc\":true}");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            requestPermissions(new String[]{
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION}, 2);
         }
     }
 
@@ -185,11 +270,22 @@ public class MainActivity extends Activity {
 
     public void startSession() {
         if (session.isRunning()) return;
+        // 卸载重装后运行时权限会被清掉，此时点「通话」不能静默失败，
+        // 先申请权限，拿到后自动接上。
+        if (Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingStart = true;
+            ensurePermissions();
+            return;
+        }
         session.start();
     }
 
     public void stopSession() {
-        session.stop();
+        // cleanup() 里要 join 采集/播放线程（各最多 400ms），
+        // 放主线程会卡住按钮动画，挪到工作线程。
+        new Thread(session::stop, "xz-stop").start();
     }
 
     public void goHome() {
