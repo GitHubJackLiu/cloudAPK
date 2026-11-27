@@ -2,12 +2,9 @@ package com.xiaodu.voice;
 
 import android.util.Log;
 
-import org.json.JSONObject;
-
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.security.cert.X509Certificate;
@@ -27,22 +24,27 @@ import javax.net.ssl.X509TrustManager;
  *     （OTA 下发的 subscribe_topic 是字面量 "null"，由 broker 按 client_id 路由）
  *   · 引第三方 MQTT 库反而要处理它的自动重连与订阅逻辑，与我们「不订阅」的约定冲突
  *
- * 必需的能力：
- *   CONNECT(带用户名密码 + TLS) → CONNACK
- *   PUBLISH(qos0) → 发控制消息
- *   读服务端 PUBLISH → 解析 JSON
- *   PINGREQ 保活
+ * 报文格式要点（之前写错过，别再踩）：
+ *   · 固定头首字节 = packetType << 4 | flags，不是 packetType 本身
+ *       CONNECT=0x10  CONNACK=0x20  PUBLISH(QoS0)=0x30
+ *       PINGREQ=0xC0  PINGRESP=0xD0  DISCONNECT=0xE0
+ *   · 固定头第二段是「剩余长度」，用可变字节整数（varint，7 bit/字节，
+ *     首字节 bit7=1 表示还有后续），不是定长 2 字节
+ *   · 剩余长度 = 可变头长度 + 有效载荷长度（CONNECT 的可变头固定 10 字节）
  */
 public class MqttClient {
 
     private static final String TAG = "XzMqtt";
 
-    private static final byte CONNECT = 1;
-    private static final byte CONNACK = 2;
-    private static final byte PUBLISH = 3;
-    private static final byte PINGREQ = 12;
-    private static final byte PINGRESP = 13;
-    private static final byte DISCONNECT = 14;
+    private static final int PKT_CONNECT    = 0x10;
+    private static final int PKT_CONNACK    = 0x20;
+    private static final int PKT_PUBLISH    = 0x30;
+    private static final int PKT_PINGREQ    = 0xC0;
+    private static final int PKT_PINGRESP   = 0xD0;
+    private static final int PKT_DISCONNECT = 0xE0;
+
+    /** CONNECT 可变头固定 10 字节 */
+    private static final int CONNECT_VH_LEN = 10;
 
     private final String host;
     private final int port;
@@ -78,44 +80,51 @@ public class MqttClient {
     public boolean connect() {
         try {
             SSLSocketFactory factory = sslFactory();
-            // 关键：必须带 SNI。
-            // factory.createSocket() 无参版本不会设置 SNI，服务端（多域名
-            // 负载均衡）收到无名握包会直接断开，表现为 EOFException。
-            // 这里先建裸 TCP 再升级为 TLS，并把 host 作为 SNI 传进去。
-            java.net.Socket raw = new java.net.Socket();
+            // 必须带 SNI：factory.createSocket() 无参版本不设 SNI，
+            // 多域名负载均衡收到无名握手包会直接断开。
+            // 先建裸 TCP，再升级为 TLS，让 host 作为 SNI 送出。
+            Socket raw = new Socket();
             raw.connect(new InetSocketAddress(host, port), 15000);
             raw.setTcpNoDelay(true);
             SSLSocket s = (SSLSocket) factory.createSocket(raw, host, port, true);
             s.setSoTimeout(0);
             s.startHandshake();
             Log.i(TAG, "TLS ok: " + s.getSession().getProtocol()
-                    + " " + (s.getSession().getCipherSuite()));
+                    + " " + s.getSession().getCipherSuite());
             socket = s;
             out = new DataOutputStream(s.getOutputStream());
             in = new DataInputStream(s.getInputStream());
 
             sendConnect();
-            // 等 CONNACK
+
+            // 等 CONNACK：固定头 + varint 剩余长度 + flags + return code
             s.setSoTimeout(15000);
             int type = in.readUnsignedByte();
-            if (type != CONNACK) {
-                Log.e(TAG, "expect CONNACK, got " + type);
+            if (type != PKT_CONNACK) {
+                Log.e(TAG, "expect CONNACK(0x20), got 0x" + Integer.toHexString(type));
                 close();
                 return false;
             }
-            in.readUnsignedShort();          // 剩余长度
-            in.readUnsignedByte();           // flags
+            int rem = readRemLen();
+            if (rem < 2) {
+                Log.e(TAG, "CONNACK 剩余长度异常: " + rem);
+                close();
+                return false;
+            }
+            int ackFlags = in.readUnsignedByte();
             int rc = in.readUnsignedByte();
+            if (rem > 2) in.skipBytes(rem - 2);
             if (rc != 0) {
                 Log.e(TAG, "connect refused rc=" + rc);
                 close();
                 return false;
             }
+            Log.i(TAG, "CONNACK ok, sessionPresent=" + (ackFlags & 1));
             s.setSoTimeout(0);
             connected = true;
             readerThread = new Thread(this::readLoop, "xz-mqtt-rx");
             readerThread.start();
-            Log.i(TAG, "connected to " + host + ":" + port);
+            Log.i(TAG, "connected to " + host + ":" + port + " clientId=" + clientId);
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "connect failed: " + t, t);
@@ -141,32 +150,39 @@ public class MqttClient {
 
     private void sendConnect() throws Exception {
         byte[] payload = buildConnectPayload();
-        byte[] vh = new byte[10];
-        vh[0] = CONNECT;
-        vh[1] = (byte) (payload.length >>> 8);      // 剩余长度（<128 时高字节为 0）
-        vh[2] = (byte) (payload.length & 0xff);
-        System.arraycopy(protocolName(), 0, vh, 3, 4);  // "MQTT"
-        vh[7] = 4;                                   // protocol level 3.1.1
-        vh[8] = (byte) 0xC2;                          // connect flags: username+password+clean
-        vh[9] = 60;                                  // keepalive
+
+        // 可变头（10 字节）：协议名长度(2) + "MQTT"(4) + level(1) + flags(1) + keepalive(2)
+        byte[] vh = new byte[CONNECT_VH_LEN];
+        vh[0] = 0x00;
+        vh[1] = 0x04;                       // 协议名 "MQTT" 长度 = 4
+        vh[2] = 'M';
+        vh[3] = 'Q';
+        vh[4] = 'T';
+        vh[5] = 'T';
+        vh[6] = 0x04;                       // protocol level 4 = MQTT 3.1.1
+        vh[7] = (byte) 0xC2;                // username + password + clean session
+        vh[8] = 0x00;                       // keepalive 高字节
+        vh[9] = 60;                         // keepalive = 60s
+
+        int remaining = CONNECT_VH_LEN + payload.length;
+
+        out.writeByte(PKT_CONNECT);         // 固定头首字节
+        out.write(encodeRemLen(remaining)); // 剩余长度 varint
         out.write(vh);
         out.write(payload);
         out.flush();
-    }
-
-    private byte[] protocolName() {
-        return new byte[]{'M', 'Q', 'T', 'T'};
+        Log.i(TAG, "CONNECT sent, clientId=" + clientId + " remaining=" + remaining);
     }
 
     private byte[] buildConnectPayload() throws Exception {
-        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
         writeString(bo, clientId);
         writeString(bo, username);
         writeString(bo, password);
         return bo.toByteArray();
     }
 
-    private void writeString(java.io.ByteArrayOutputStream bo, String s) throws Exception {
+    private void writeString(ByteArrayOutputStream bo, String s) throws Exception {
         byte[] b = (s == null ? "" : s).getBytes("UTF-8");
         bo.write((b.length >>> 8) & 0xff);
         bo.write(b.length & 0xff);
@@ -180,21 +196,21 @@ public class MqttClient {
         try {
             byte[] t = topic.getBytes("UTF-8");
             byte[] p = payload.getBytes("UTF-8");
-            // 变长剩余长度：topic(2+n) + payload
-            int rem = 2 + t.length + p.length;
-            byte[] head = new byte[1 + 4 + rem];
-            head[0] = PUBLISH;
-            int hl = 0;
+            int rem = 2 + t.length + p.length;      // topic 长度前缀 + topic + 正文
             byte[] len = encodeRemLen(rem);
-            System.arraycopy(len, 0, head, 1, len.length);
-            hl = len.length;
-            int idx = 1 + hl;
-            head[idx++] = (byte) ((t.length >>> 8) & 0xff);
-            head[idx++] = (byte) (t.length & 0xff);
-            System.arraycopy(t, 0, head, idx, t.length);
+            int total = 1 + len.length + rem;
+            byte[] buf = new byte[total];
+            int idx = 0;
+            buf[idx++] = (byte) PKT_PUBLISH;        // 0x30 = PUBLISH + QoS0 + no retain
+            System.arraycopy(len, 0, buf, idx, len.length);
+            idx += len.length;
+            buf[idx++] = (byte) ((t.length >>> 8) & 0xff);
+            buf[idx++] = (byte) (t.length & 0xff);
+            System.arraycopy(t, 0, buf, idx, t.length);
             idx += t.length;
-            System.arraycopy(p, 0, head, idx, p.length);
-            out.write(head, 0, idx + p.length);
+            System.arraycopy(p, 0, buf, idx, p.length);
+            idx += p.length;
+            out.write(buf, 0, idx);
             out.flush();
         } catch (Throwable e) {
             Log.w(TAG, "publish failed: " + e);
@@ -221,18 +237,18 @@ public class MqttClient {
                 int type = in.readUnsignedByte();
                 int rem = readRemLen();
                 if (rem < 0) break;
-                if (type == PUBLISH) {
+                int kind = type & 0xF0;         // 高 4 位是报文类型
+                if (kind == PKT_PUBLISH) {
                     byte[] body = new byte[rem];
                     in.readFully(body);
                     // body: topic(2+n) + [packetId(2) if qos>0] + payload
+                    if (body.length < 2) continue;
                     int tlen = ((body[0] & 0xff) << 8) | (body[1] & 0xff);
-                    int idx = 2 + tlen;
+                    int qos = (type >> 1) & 0x03;
+                    int idx = 2 + tlen + (qos > 0 ? 2 : 0);
+                    if (idx > body.length) continue;
                     String payload = new String(body, idx, body.length - idx, "UTF-8");
                     if (listener != null) listener.onMessage(payload);
-                } else if (type == PINGRESP) {
-                    // ignore
-                } else if (type == CONNACK) {
-                    in.skipBytes(rem);
                 } else {
                     if (rem > 0) in.skipBytes(rem);
                 }
@@ -267,8 +283,8 @@ public class MqttClient {
                 try {
                     Thread.sleep(30000);
                     if (!connected) break;
-                    out.write(PINGREQ);
-                    out.write(0);
+                    out.writeByte(PKT_PINGREQ);
+                    out.writeByte(0);
                     out.flush();
                 } catch (Throwable ignored) { }
             }
@@ -276,15 +292,15 @@ public class MqttClient {
     }
 
     public void disconnect() {
-        closed = true;
-        connected = false;
         try {
-            if (out != null) {
-                out.write(DISCONNECT);
-                out.write(0);
+            if (out != null && connected) {
+                out.writeByte(PKT_DISCONNECT);
+                out.writeByte(0);
                 out.flush();
             }
         } catch (Throwable ignored) { }
+        closed = true;
+        connected = false;
         close();
     }
 
