@@ -58,26 +58,25 @@
 
   .hero{position:absolute;top:0;right:0;bottom:0;left:0;
     display:flex;align-items:center;justify-content:center}
-  /* 72vh ≈ 404px，是上一版 224px 的 1.8 倍；46vw 兜住窄屏 */
-  .avatar{width:min(440px,72vh,46vw);height:min(440px,72vh,46vw);border-radius:50%;
+  /* 回到 Kiwi 版的 336px。上一版放到 404px + Canvas 遮罩合成，
+     gfxinfo 实测 janky 87%、每帧 46ms，气泡和按钮都跟着排队。 */
+  .avatar{width:min(336px,72vh,46vw);height:min(336px,72vh,46vw);border-radius:50%;
     position:relative;overflow:hidden;
-    background:radial-gradient(circle at 50% 34%,#2b3d63,#141d30 72%);
-    box-shadow:0 0 0 1px #2c3a56,0 18px 52px rgba(0,0,0,.62);
+    background:radial-gradient(circle at 50% 35%,#2b3d63,#141d30 72%);
+    box-shadow:0 0 0 1px #2c3a56,0 20px 60px rgba(0,0,0,.6);
     transition:box-shadow .3s}
-  /* 表情层。两层都常驻，切换只改 opacity，不再「先销毁再新建」。
-     旧做法靠 visibility 硬切，新的 canvas 只要没画出来（首帧空白、尺寸算成 0、
-     建动画被主线程拖住）看到的就是「脸消失 1~2 秒」；改成淡入淡出后，
-     交叉期间旧脸一直在，任何情况下都不会出现空脸。 */
+  /* 表情层。两层都常驻，切换只改 opacity；旧层先 pause 再淡出，
+     交叉期间画面上始终有一张脸。SVG 渲染器跟 Kiwi 版一致。 */
   .facelayer{position:absolute;top:0;right:0;bottom:0;left:0;opacity:0;
     transition:opacity .22s linear}
   .facelayer svg,.facelayer canvas{width:100%!important;height:100%!important;display:block}
-  .avatar::after{content:"";position:absolute;top:-13px;right:-13px;bottom:-13px;left:-13px;border-radius:50%;
-    border:3px solid rgba(90,212,139,.5);opacity:0;pointer-events:none;
+  .avatar::after{content:"";position:absolute;top:-12px;right:-12px;bottom:-12px;left:-12px;border-radius:50%;
+    border:3px solid rgba(90,212,139,.45);opacity:0;pointer-events:none;
     will-change:transform,opacity}
-  .stage.speaking .avatar::after{animation:halo 2s ease-out infinite}
-  .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 18px 52px rgba(0,0,0,.62),
-               0 0 46px rgba(90,212,139,.26)}
-  @keyframes halo{0%{transform:scale(.97);opacity:.5}100%{transform:scale(1.07);opacity:0}}
+  .stage.speaking .avatar::after{animation:halo 1.4s ease-out infinite}
+  .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 20px 60px rgba(0,0,0,.6),
+               0 0 48px rgba(90,212,139,.28)}
+  @keyframes halo{0%{transform:scale(.94);opacity:.7}100%{transform:scale(1.18);opacity:0}}
 
   /* 按钮改为右下角悬浮：不再占竖直空间，脸才可能长到 404px */
   .callwrap{position:absolute;right:46px;bottom:54px;z-index:7;
@@ -312,15 +311,12 @@
 
   // ---------------- 表情切换 ----------------
   /*
-   * 实测事件时间线（14:31:53.659 llm → .793 tts.sentence_start → .991 首个音频包）：
-   * 文本其实比声音早，可用户听到的却是「话先说、文字后显示」。原因不在协议，
-   * 在渲染——`lottie.loadAnimation` 建 canvas 动画（每个表情还带 track matte，
-   * canvas 渲染器要额外两张离屏画布做合成）在这台 CPU 上是几百毫秒的同步开销，
-   * 正好堵在 llm 与 sentence_start 之间，把随后的文本 DOM 更新一起压住。
-   * 所以：① 表情切换整体延后 320ms，让文本先落屏；② 每层单独淡入淡出，
-   * 新层画满两帧才开始交叉，旧的在整个交叉期都还在，画面上不会出现空脸。
+   * 表情切回 Kiwi 版的 SVG 渲染器 + 336px 头像后，建动画的开销大幅下降，
+   * 所以切换延迟从 320ms 收到 100ms（只留一点让 sentence_start 的文本先落屏）。
+   * 双层淡入淡出保留：新层画满两帧才交叉，旧层先 pause 再退，
+   * 任何时刻画面上都至少有一张脸。
    */
-  var EMO_DELAY_MS = 320;
+  var EMO_DELAY_MS = 100;
   var boxes = [$('flA'), $('flB')];
   var boxIdx = 0;                    // 当前可见的那一层
   var layerAnim = [null, null];      // 每层里装着的 lottie 实例
@@ -341,13 +337,10 @@
       box.innerHTML = '';
       var anim;
       try {
-        // canvas 比 svg 省得多：svg 每帧要动几十个 path 节点，脸放大到 404px 后
-        // 重绘面积翻了 3 倍，MT8167 的 CPU 顶不住，直接用手点都发涩。
+        // 回到 Kiwi 版的 SVG 渲染器：不带遮罩离屏画布，336px 下实测流畅。
         anim = lottie.loadAnimation({
-          container: box, renderer: 'canvas',
-          loop: true, autoplay: true, animationData: data,
-          rendererSettings: { clearCanvas: true, progressiveLoad: true,
-                              hideOnTransparent: true }
+          container: box, renderer: 'svg',
+          loop: true, autoplay: true, animationData: data
         });
       } catch(e){
         // 建不起来就保持旧表情，绝不把脸清空
@@ -362,9 +355,6 @@
         done = true;
         if (seq !== emoLoad){ try { anim.destroy(); } catch(e){} return; }
         try { anim.resize(); } catch(e){}
-        // 先把第 0 帧实实在在画进 canvas 再交给它自己播。个别表情在 rAF
-        // 被拖住时首帧迟迟不上屏，看起来就是「偶尔脸不见了」。
-        try { anim.goToAndStop(0, true); } catch(e){}
         boxIdx = idx;
         emoAnim = anim;
         box.style.opacity = '1';
@@ -380,7 +370,7 @@
         }
       }
       // 先挂兜底再挂事件：即使 addEventListener 出问题也不会永远不显示
-      setTimeout(show, 380);
+      setTimeout(show, 200);
       try {
         anim.addEventListener('enterFrame', function(){
           if (done) return;
