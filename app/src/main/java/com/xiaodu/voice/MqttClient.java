@@ -78,10 +78,18 @@ public class MqttClient {
     public boolean connect() {
         try {
             SSLSocketFactory factory = sslFactory();
-            SSLSocket s = (SSLSocket) factory.createSocket();
-            s.connect(new InetSocketAddress(host, port), 15000);
+            // 关键：必须带 SNI。
+            // factory.createSocket() 无参版本不会设置 SNI，服务端（多域名
+            // 负载均衡）收到无名握包会直接断开，表现为 EOFException。
+            // 这里先建裸 TCP 再升级为 TLS，并把 host 作为 SNI 传进去。
+            java.net.Socket raw = new java.net.Socket();
+            raw.connect(new InetSocketAddress(host, port), 15000);
+            raw.setTcpNoDelay(true);
+            SSLSocket s = (SSLSocket) factory.createSocket(raw, host, port, true);
             s.setSoTimeout(0);
             s.startHandshake();
+            Log.i(TAG, "TLS ok: " + s.getSession().getProtocol()
+                    + " " + (s.getSession().getCipherSuite()));
             socket = s;
             out = new DataOutputStream(s.getOutputStream());
             in = new DataInputStream(s.getInputStream());
@@ -110,7 +118,7 @@ public class MqttClient {
             Log.i(TAG, "connected to " + host + ":" + port);
             return true;
         } catch (Throwable t) {
-            Log.e(TAG, "connect failed: " + t);
+            Log.e(TAG, "connect failed: " + t, t);
             close();
             return false;
         }
