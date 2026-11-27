@@ -352,6 +352,9 @@ public class XzSession {
         try {
             JSONObject m = new JSONObject(payload);
             String t = m.optString("type");
+            // 诊断：把服务端原始报文打出来（截断），排查字段名/取值问题
+            Log.i(TAG, "rx<" + t + "> " + (payload.length() > 400
+                    ? payload.substring(0, 400) + "…" : payload));
             if ("hello".equals(t)) {
                 JSONObject udpObj = m.optJSONObject("udp");
                 if (udpObj != null) {
@@ -362,10 +365,17 @@ public class XzSession {
                     try {
                         aesKey = hexToBytes(key);
                     } catch (Exception ignored) { }
+                    Log.i(TAG, "hello.udp server=" + udpServer + ":" + udpPort
+                            + " enc=" + udpObj.optString("encryption")
+                            + " keyLen=" + (aesKey == null ? -1 : aesKey.length)
+                            + " nonce=" + (nonceHex == null ? "null" : nonceHex.length() + "ch"));
+                } else {
+                    Log.w(TAG, "hello 里没有 udp 对象！");
                 }
                 sessionId = m.optString("session_id");
                 JSONObject ap = m.optJSONObject("audio_params");
                 if (ap != null) downRate = ap.optInt("sample_rate", 24000);
+                Log.i(TAG, "hello.ok session=" + sessionId + " downRate=" + downRate);
                 return;
             }
             if ("tts".equals(t)) {
@@ -515,6 +525,10 @@ public class XzSession {
      */
     private void onMicPcm(byte[] data, int len) {
         if (!running.get() || udp == null) return;
+        // 密钥还没握手完成时不要往上发：encode+加密都用不了，
+        // 每 60ms 刷一条异常日志只会把 logcat 淹掉。
+        if (aesKey == null || aesKey.length != 16
+                || nonceHex == null || nonceHex.length() < 32) return;
         if (paused) {
             // 半双工暂停期间丢弃积压，否则恢复开麦时会把 TTS 期间的
             // 陈旧音频当成用户说话发上去。
