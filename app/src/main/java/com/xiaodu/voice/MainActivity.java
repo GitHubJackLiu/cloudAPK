@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         audio = new AudioEngine(am);
         aec = new AecTester(audio, am);
-        aecMode = new AecModeTester(audio, am);
+        aecMode = new AecModeTester(audio);
         session = new XzSession(this, settings, audio);
 
         FrameLayout root = new FrameLayout(this);

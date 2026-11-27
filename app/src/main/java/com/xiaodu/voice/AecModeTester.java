@@ -1,30 +1,43 @@
 package com.xiaodu.voice;
 
-import android.media.AudioManager;
 import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AEC 决定性实验：用 HAL 的 aec_mode 开关做同配置 A/B 对照。
+ * AEC 第二轮实验：围绕「回声参考信号从哪来」做变量矩阵。
  *
- * 前面那版「跨通路矩阵」的结论只能说明不同采集源的增益不同，
- * 没法回答真正的问题：**MTK 的硬件 AEC 到底有没有在抑制回声**。
- * 所以这里换一种测法：
+ * 第一轮已经查清的事实（MT8167 / 小度 1C）：
  *
- *   固定同一套通路（VOICE_COMMUNICATION + VOICE_COMMUNICATION + MODE_IN_COMMUNICATION），
- *   只切 HAL 的 aec_mode 开关，其他一切不变，再测同一段 1kHz 残余回声：
+ *   1) 只有 MediaRecorder.AudioSource.VOICE_RECOGNITION(6) 会让 HAL 走
+ *      AudioALSACaptureHandlerAEC + VoIP 场景（categoryPath =
+ *      "Profile,Hands-free no 1mic NR"、bVoIPEnable=1、voip_on=1）。
+ *      VOICE_COMMUNICATION(7) 反而走普通 handler + "Handset" 场景，不是 AEC 通路。
  *
- *        ERLE = 残余电平(aec_mode=false) − 残余电平(aec_mode=true)
+ *   2) VoIP 场景的 MagiAEC 参数本来就是全开的
+ *      （voip_mode_para uint[1]=224：bit8 AEC=0(on)、bit0 Handfree、
+ *        bit1 ES=0(on)、bit10 FirstES=0、bit11 NLP=0、bit14 AES=0）。
+ *      所以不是参数没开的问题。
  *
- * 这样增益、AGC、NR 全部被控住了，差值就是 AEC 本身的抑制量。
- * 反序再测一遍（AEC 先开再关）用于排除「开关切换需要时间重新收敛」带来的顺序偏差。
+ *   3) 采集侧的 SPELayer 真的起来了（"Start, SWIP ver = 10.2"），
+ *      它内部有 mDLInBufferQ / mDLDelayBufferQ —— 下行参考就该从这里进。
  *
- * 开关来源：audio.primary.mt8167.so 的 AudioALSACaptureHandlerAEC::setParameters
- * 认 "aec_mode" = true/false，HAL 内部会置 mForceAECRec 并重新打开采集句柄。
- * 日志侧证据：logcat 出现 "app request aec_mode=true" / "mForceAECRec=1" /
- * "open AEC even record is already start"。
+ *   4) 但下行播放侧永远是 AudioALSAPlaybackHandlerNormal，
+ *      从来没出现 AudioALSAPlaybackHandlerWithSphEn / Play_PCM_With_SpeechEnhance_Routine。
+ *      下行 PCM 进不了 SPELayer ⇒ 回声参考从源头就断了 ⇒ AEC 无从下手。
+ *
+ * 所以这轮要试的是「怎样让下行走进语音增强通路」：
+ *   · 采集源换成 6（唯一进 VoIP 场景的源）
+ *   · track 与 record 的开启顺序（HAL 建下行 handler 时会看当前有没有 VoIP 采集流）
+ *   · 下行是否必须钉在内置扬声器（本机没有 Telecom 服务，setSpeakerphoneOn(true) 是空的）
+ *   · 下行 usage 换成 VOICE_ASSISTANCE
+ *   · 以及非通信模式 / source=7 两组作为对照
+ *
+ * 判定标准：
+ *   · logcat 里出现 AudioALSAPlaybackHandlerWithSphEn 或 Play_PCM_With_SpeechEnhance_Routine
+ *     ⇒ 找到开关了；
+ *   · 否则看残余回声电平是否明显低于对照组的 ~-54 dBFS。
  */
 public class AecModeTester {
 
@@ -35,41 +48,73 @@ public class AecModeTester {
 
     public static class Result {
         public String name;
+        public int src, usage, mode;
+        public boolean trackFirst, prefSpeaker;
         public double floorDb = -120;   // 静默本底
-        public double rawDb = -120;     // aec_mode=false 时的残余回声
-        public double aecDb = -120;     // aec_mode=true  时的残余回声
-        public double erleFwd = 0;      // 正序：raw − aec
-        public double erleRev = 0;      // 反序：aec − raw
-        public double erleAvg = 0;
-        public double testEnableDb = -120;   // 叠加 AECREC_TEST_ENABLE=1 后的残余回声
-        public String readBack = "";      // getParameters("aec_mode") 读回值
+        public double toneDb = -120;    // 放测试音时的残余回声
         public String note = "";
     }
 
     private final AudioEngine engine;
-    private final AudioManager am;
     private volatile boolean cancel;
 
-    public AecModeTester(AudioEngine e, AudioManager am) {
+    public AecModeTester(AudioEngine e) {
         this.engine = e;
-        this.am = am;
     }
 
     public void cancel() { cancel = true; }
 
-    /**
-     * 跑一次完整 A/B。
-     * 一次大约 25~35 秒。
-     */
-    public Result run(ProgressCb cb) {
-        Result r = new Result();
-        r.name = "A/B · VOICECOMM+VOICECOMM+COMM · aec_mode 开关对照";
+    /** 一组配置 */
+    private static class Cfg {
+        final String name; final int src, usage, mode;
+        final boolean trackFirst, prefSpeaker;
+        Cfg(String name, int src, int usage, int mode, boolean trackFirst, boolean prefSpeaker) {
+            this.name = name; this.src = src; this.usage = usage; this.mode = mode;
+            this.trackFirst = trackFirst; this.prefSpeaker = prefSpeaker;
+        }
+    }
 
+    public List<Result> runMatrix(ProgressCb cb) {
+        List<Result> out = new ArrayList<>();
+        List<Cfg> cases = new ArrayList<>();
+        // 主攻：source=6（唯一进 VoIP/AEC 场景的采集源）
+        cases.add(new Cfg("P1 · src6 + VOICECOMM + COMM + record先开",
+                AudioEngine.SRC_VOICE_RECOG, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.MODE_COMM, false, false));
+        cases.add(new Cfg("P2 · P1 + 钉内置扬声器",
+                AudioEngine.SRC_VOICE_RECOG, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.MODE_COMM, false, true));
+        cases.add(new Cfg("P3 · P2 + track先开（让HAL先看到VoIP采集流）",
+                AudioEngine.SRC_VOICE_RECOG, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.MODE_COMM, true, true));
+        cases.add(new Cfg("P4 · src6 + VOICE_ASSISTANCE + COMM + 钉扬声器",
+                AudioEngine.SRC_VOICE_RECOG, AudioEngine.USE_VOICE_ASSIST,
+                AudioEngine.MODE_COMM, false, true));
+        cases.add(new Cfg("P5 · src6 + VOICECOMM + NORMAL（脱离通信模式）",
+                AudioEngine.SRC_VOICE_RECOG, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.MODE_NORMAL, false, false));
+        cases.add(new Cfg("E0 · src7 + VOICECOMM + COMM（对照组：已知无AEC通路）",
+                AudioEngine.SRC_VOICE_COMM, AudioEngine.USE_VOICE_COMM,
+                AudioEngine.MODE_COMM, false, true));
+
+        for (Cfg c : cases) {
+            if (cancel) break;
+            out.add(runCase(c, cb));
+        }
+        return out;
+    }
+
+    private Result runCase(Cfg c, ProgressCb cb) {
+        Result r = new Result();
+        r.name = c.name;
+        r.src = c.src; r.usage = c.usage; r.mode = c.mode;
+        r.trackFirst = c.trackFirst; r.prefSpeaker = c.prefSpeaker;
         try {
-            engine.setPath(AudioEngine.SRC_VOICE_COMM,
-                    AudioEngine.USE_VOICE_COMM, AudioEngine.MODE_COMM);
+            engine.setPath(c.src, c.usage, c.mode);
+            engine.setTrackFirst(c.trackFirst);
+            engine.setPrefSpeaker(c.prefSpeaker);
             engine.setExclusive(true);
-            engine.setCaptureOnly(false);   // 引擎必须自己开下行 track，echo reference 才绑得住
+            engine.setCaptureOnly(false);
             if (!engine.start()) {
                 r.note = "通路启动失败";
                 if (cb != null) cb.onProgress(r);
@@ -78,70 +123,34 @@ public class AecModeTester {
             try {
                 Thread.sleep(1500);   // 等 HAL 切到 speech 通路并建立 echo reference
 
-                // ---- 本底 ----
                 double f1 = engine.captureToneLevel(700, TONE_HZ);
                 double f2 = engine.captureToneLevel(700, TONE_HZ);
                 r.floorDb = Math.min(f1, f2);
 
-                // ---- 正序：先关后开 ----
-                engine.setHalAecMode(false);
-                Thread.sleep(1200);
-                double raw = measureEcho();
-                r.rawDb = raw;
-
-                engine.setHalAecMode(true);
-                Thread.sleep(1200);
-                double aec = measureEcho();
-                r.aecDb = aec;
-                r.erleFwd = raw - aec;
-
-                // ---- 反序：先开后关（排除切换收敛造成的顺序偏差）----
-                double aec2 = measureEcho();       // 保持 ON，再测一次看稳定性
-                engine.setHalAecMode(false);
-                Thread.sleep(1200);
-                double raw2 = measureEcho();
-                r.erleRev = aec2 - raw2;
-
-                r.erleAvg = (r.erleFwd + r.erleRev) / 2.0;
-
-                // ---- 读回参数，确认 HAL 收到了 ----
-                r.readBack = engine.getHalParam("aec_mode");
-
-                // ---- 再叠加 AECREC_TEST_ENABLE=1 这条独立路径 ----
-                engine.setHalAecMode(true);
-                engine.setHalParam("AECREC_TEST_ENABLE=1");
-                Thread.sleep(1200);
-                r.testEnableDb = measureEcho();
-                Log.i(TAG, "AECREC_TEST_ENABLE=1 level="
-                        + String.format("%.1f", r.testEnableDb));
-
-                if (r.erleAvg > 6) {
-                    r.note = String.format("AEC 生效：残余回声 %.1f → %.1f dBFS，抑制 %.1f dB",
-                            r.rawDb, r.aecDb, r.erleAvg);
+                r.toneDb = measureEcho();
+                if (r.toneDb - r.floorDb < 3) {
+                    r.note = "有声电平未明显高于本底 → 测试音没播出来或麦克风没工作";
                 } else {
-                    r.note = String.format("抑制量仅 %.1f dB —— AEC 未真正工作", r.erleAvg);
+                    r.note = String.format("本底 %.1f → 残余回声 %.1f dBFS",
+                            r.floorDb, r.toneDb);
                 }
             } finally {
                 engine.stop();
                 engine.setExclusive(false);
-                Thread.sleep(400);
+                Thread.sleep(600);
             }
         } catch (Throwable t) {
-            Log.e(TAG, "run failed", t);
+            Log.e(TAG, "case failed", t);
             r.note = "异常 " + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
         if (cb != null) cb.onProgress(r);
-        Log.i(TAG, String.format(
-                "A/B | floor=%.1f raw=%.1f aec=%.1f erleFwd=%.1f erleRev=%.1f avg=%.1f | %s",
-                r.floorDb, r.rawDb, r.aecDb, r.erleFwd, r.erleRev, r.erleAvg,
-                r.note == null ? "" : r.note));
+        Log.i(TAG, String.format("%s | src=%d use=%d mode=%d tf=%d ps=%d | floor=%.1f 残余=%.1f | %s",
+                r.name, r.src, r.usage, r.mode, r.trackFirst ? 1 : 0, r.prefSpeaker ? 1 : 0,
+                r.floorDb, r.toneDb, r.note == null ? "" : r.note));
         return r;
     }
 
-    /**
-     * 放 1kHz 测试音并同期测残余回声的 1kHz 分量。
-     * 采集在当前线程，播放在独立线程并发进行。
-     */
+    /** 放 1kHz 测试音并同期测残余回声的 1kHz 分量 */
     private double measureEcho() throws InterruptedException {
         final double[] echo = new double[1];
         Thread player = new Thread(new Runnable() {

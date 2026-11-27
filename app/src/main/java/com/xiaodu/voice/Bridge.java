@@ -220,30 +220,31 @@ public class Bridge {
     }
 
     /**
-     * AEC 决定性实验：同配置下用 HAL 的 aec_mode 开关做 A/B 对照。
+     * AEC 第二轮实验：围绕「回声参考从哪来」做播放侧变量矩阵。
      * 跨通路矩阵无法回答「硬件 AEC 有没有在抑制回声」，这个才是。
      */
     @JavascriptInterface
     public void runAecMode() {
         if (aecMode == null) return;
         new Thread(() -> {
-            AecModeTester.Result r = aecMode.run((res) -> {
+            List<AecModeTester.Result> rs = aecMode.runMatrix((res) -> {
                 JSONObject o = new JSONObject();
                 try {
                     o.put("name", res.name);
+                    o.put("src", res.src);
+                    o.put("usage", res.usage);
+                    o.put("mode", res.mode);
+                    o.put("trackFirst", res.trackFirst);
+                    o.put("prefSpeaker", res.prefSpeaker);
                     o.put("floorDb", res.floorDb);
-                    o.put("rawDb", res.rawDb);
-                    o.put("aecDb", res.aecDb);
-                    o.put("erleFwd", res.erleFwd);
-                    o.put("erleRev", res.erleRev);
-                    o.put("erleAvg", res.erleAvg);
-                    o.put("testEnableDb", res.testEnableDb);
-                    o.put("readBack", res.readBack == null ? "" : res.readBack);
+                    o.put("toneDb", res.toneDb);
                     o.put("note", res.note == null ? "" : res.note);
                 } catch (Exception ignored) { }
                 emit("aecMode", o.toString());
             });
-            emit("aecModeDone", "{}");
+            JSONObject done = new JSONObject();
+            try { done.put("count", rs.size()); } catch (Exception ignored) { }
+            emit("aecModeDone", done.toString());
         }, "xz-aecmode").start();
     }
 
@@ -271,18 +272,17 @@ public class Bridge {
             return;
         }
         new Thread(() -> {
-            AecModeTester.Result r = aecMode.run(res -> {
+            List<AecModeTester.Result> rs = aecMode.runMatrix(res -> {
                 JSONObject o = new JSONObject();
                 try {
+                    o.put("name", res.name);
                     o.put("floorDb", res.floorDb);
-                    o.put("rawDb", res.rawDb);
-                    o.put("aecDb", res.aecDb);
-                    o.put("erleAvg", res.erleAvg);
+                    o.put("toneDb", res.toneDb);
                     o.put("note", res.note == null ? "" : res.note);
                 } catch (Exception ignored) { }
                 emit("aecMode", o.toString());
             });
-            Log.i(TAG, "A/B done: " + r.note);
+            Log.i(TAG, "AEC mode matrix done, cases=" + rs.size());
         }, "xz-aecmode").start();
     }
 

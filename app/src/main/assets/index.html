@@ -407,18 +407,15 @@
   }
   function addAecModeResult(p){
     var d = document.createElement('div');
-    var e = typeof p.erleAvg === 'number' ? p.erleAvg : 0;
+    var dB = typeof p.toneDb === 'number' ? p.toneDb : -120;
     var cls = 'aresult';
-    if (e >= 6) cls += ' good';
-    else if (e < 3) cls += ' bad';
+    if (dB < -70) cls += ' good';
+    else if (dB > -60) cls += ' bad';
     d.className = cls;
-    var txt = '<b>aec_mode A/B 对照</b><br>';
-    txt += '本底 ' + num(p.floorDb) + ' dBFS<br>';
-    txt += 'aec=false 残余 ' + num(p.rawDb) + ' dBFS · aec=true 残余 ' + num(p.aecDb) + ' dBFS<br>';
-    txt += '正序 ' + num(p.erleFwd) + ' dB · 反序 ' + num(p.erleRev) + ' dB · ';
-    txt += '<b>平均 ERLE ' + num(p.erleAvg) + ' dB</b>';
-    if (typeof p.testEnableDb === 'number') txt += '<br>AECREC_TEST_ENABLE=1 → ' + num(p.testEnableDb) + ' dBFS';
-    if (p.readBack) txt += '<br>读回 aec_mode = ' + p.readBack;
+    var txt = '<b>' + (p.name||'') + '</b><br>';
+    txt += 'src=' + p.src + ' use=' + p.usage + ' mode=' + p.mode;
+    txt += ' · track先开=' + (p.trackFirst?1:0) + ' · 钉扬声器=' + (p.prefSpeaker?1:0) + '<br>';
+    txt += '本底 ' + num(p.floorDb) + ' dBFS · <b>残余回声 ' + num(p.toneDb) + ' dBFS</b>';
     if (p.note) txt += '<br>' + p.note;
     d.innerHTML = txt;
     aecOut.appendChild(d);

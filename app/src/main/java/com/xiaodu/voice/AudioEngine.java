@@ -51,6 +51,9 @@ public class AudioEngine {
     public static final int MODE_NORMAL    = AudioManager.MODE_NORMAL;
     public static final int MODE_COMM      = AudioManager.MODE_IN_COMMUNICATION;
 
+    /** 播放用途：语音助手（AudioAttributes.USAGE_VOICE_ASSISTANCE = 11，API21+） */
+    public static final int USE_VOICE_ASSIST = 11;
+
     private AudioManager audioManager;
     private AudioRecord record;
     private AudioTrack track;
@@ -59,6 +62,8 @@ public class AudioEngine {
     private volatile boolean running;
     private volatile boolean exclusive;          // AEC 实验期间独占 record
     private volatile boolean captureOnly;       // 只开采集，不开下行 track
+    private volatile boolean trackFirst;        // 先开 track 再开 record（测 HAL 的选择顺序依赖）
+    private volatile boolean prefSpeaker;       // 把下行 track 钉在内置扬声器
     private volatile int muted;             // 1=暂停上行（半双工）
     private volatile int level;             // 采集电平 0~100
     private int captureSource = SRC_VOICE_COMM;
@@ -96,6 +101,12 @@ public class AudioEngine {
      * 错误的那个，测出来的 ERLE 就没有意义了。
      */
     public void setCaptureOnly(boolean c) { this.captureOnly = c; }
+
+    /** 先开下行 track 再开采集（默认反过来） */
+    public void setTrackFirst(boolean t) { this.trackFirst = t; }
+
+    /** 下行 track 钉到内置扬声器（绕开 Telecom 缺失导致 setSpeakerphoneOn 无效） */
+    public void setPrefSpeaker(boolean p) { this.prefSpeaker = p; }
 
     /**
      * MTK HAL 的 AEC 强制开关。
@@ -164,8 +175,13 @@ public class AudioEngine {
 
     /**
      * 启动采集与播放。
+     *
      * 顺序有讲究：先设 mode，再开 AudioRecord，最后开 AudioTrack。
      * 如果先放音再开采集，HAL 可能来不及建立 echo reference 通路。
+     *
+     * （AEC 实验里顺序本身就是一个变量：HAL 在创建下行 handler 时会判断当前
+     *  是否存在 VoIP/AEC 采集流，若采集还没开，下行就会走普通 handler，
+     *  下行 PCM 进不了 SPELayer，回声参考就断了。所以留了 trackFirst 开关。）
      */
     public synchronized boolean start() {
         if (running) return true;
@@ -176,6 +192,36 @@ public class AudioEngine {
             Log.w(TAG, "setMode failed: " + t);
         }
 
+        if (trackFirst && !captureOnly) {
+            if (!openTrack()) { stopRecordOnly(); return false; }
+        }
+
+        if (!openRecord()) {
+            releaseTrack();
+            return false;
+        }
+
+        if (!trackFirst && !captureOnly) {
+            if (!openTrack()) {
+                stopRecordOnly();
+                return false;
+            }
+        }
+
+        running = true;
+        readThread = new Thread(this::readLoop, "xz-audio-read");
+        writeThread = new Thread(this::writeLoop, "xz-audio-write");
+        readThread.setPriority(Thread.MAX_PRIORITY);
+        writeThread.setPriority(Thread.MAX_PRIORITY);
+        readThread.start();
+        writeThread.start();
+        Log.i(TAG, "started src=" + captureSource + " use=" + playUsage + " mode=" + audioMode
+                + " trackFirst=" + trackFirst + " prefSpeaker=" + prefSpeaker);
+        return true;
+    }
+
+    /** 开采集 */
+    private boolean openRecord() {
         int minBuf = AudioRecord.getMinBufferSize(
                 SR_UP, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBuf <= 0) minBuf = FRAME_BYTES * 4;
@@ -194,7 +240,6 @@ public class AudioEngine {
             record = null;
             return false;
         }
-
         try {
             record.startRecording();
         } catch (Throwable t) {
@@ -203,47 +248,71 @@ public class AudioEngine {
             record = null;
             return false;
         }
+        return true;
+    }
 
+    /** 开下行播放 */
+    private boolean openTrack() {
         int outBuf = Math.max(FRAME_BYTES * 8,
                 AudioTrack.getMinBufferSize(SR_UP, AudioFormat.CHANNEL_OUT_MONO,
                         AudioFormat.ENCODING_PCM_16BIT));
-        if (!captureOnly) {
-            AudioAttributes attrs = new AudioAttributes.Builder()
-                    .setUsage(playUsage)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build();
-            AudioFormat fmt = new AudioFormat.Builder()
-                    .setSampleRate(SR_UP)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build();
-            try {
-                track = new AudioTrack(attrs, fmt, outBuf,
+        AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(playUsage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build();
+        AudioFormat fmt = new AudioFormat.Builder()
+                .setSampleRate(SR_UP)
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build();
+        try {
+            track = new AudioTrack(attrs, fmt, outBuf,
                         AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
-            } catch (Throwable t) {
-                Log.e(TAG, "AudioTrack create failed", t);
-                stopRecordOnly();
-                return false;
-            }
-            if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioTrack not initialized");
-                track.release();
-                track = null;
-                stopRecordOnly();
-                return false;
-            }
-            track.play();
+        } catch (Throwable t) {
+            Log.e(TAG, "AudioTrack create failed", t);
+            return false;
         }
-
-        running = true;
-        readThread = new Thread(this::readLoop, "xz-audio-read");
-        writeThread = new Thread(this::writeLoop, "xz-audio-write");
-        readThread.setPriority(Thread.MAX_PRIORITY);
-        writeThread.setPriority(Thread.MAX_PRIORITY);
-        readThread.start();
-        writeThread.start();
-        Log.i(TAG, "started src=" + captureSource + " use=" + playUsage + " mode=" + audioMode);
+        if (track.getState() != AudioTrack.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioTrack not initialized");
+            track.release();
+            track = null;
+            return false;
+        }
+        // 钉到内置扬声器：这台设备没有 Telecom 服务，setSpeakerphoneOn(true)
+        // 不会真的把 VOICE_COMMUNICATION 的输出从听筒改到扬声器。
+        if (prefSpeaker) {
+            try {
+                android.media.AudioDeviceInfo[] outs =
+                        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+                android.media.AudioDeviceInfo spk = null;
+                for (android.media.AudioDeviceInfo d : outs) {
+                    int t2 = d.getType();
+                    // TYPE_BUILTIN_SPEAKER = 3, TYPE_BUILTIN_SPEAKER_SAFE = 29
+                    if (t2 == 3 || t2 == 29) {
+                        spk = d;
+                        break;
+                    }
+                }
+                if (spk != null) {
+                    boolean ok = track.setPreferredDevice(spk);
+                    Log.i(TAG, "setPreferredDevice(" + spk.getProductName() + ") -> " + ok);
+                } else {
+                    Log.w(TAG, "no builtin speaker found, outputs=" + outs.length);
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "setPreferredDevice failed: " + t);
+            }
+        }
+        track.play();
         return true;
+    }
+
+    private void releaseTrack() {
+        if (track != null) {
+            try { track.stop(); } catch (Throwable ignored) { }
+            try { track.release(); } catch (Throwable ignored) { }
+            track = null;
+        }
     }
 
     public synchronized void stop() {
