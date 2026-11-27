@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>设置</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#0b0e14;color:#e6e9ef;
+    font-family:-apple-system,"Noto Sans SC",sans-serif}
+  body{overflow-y:auto;font-size:15px}
+  .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;
+    padding:10px 14px;background:#12161f;border-bottom:1px solid #1d2331}
+  .top h1{margin:0;font-size:18px;font-weight:600;flex:1}
+  .back{height:46px;padding:0 18px;border-radius:11px;background:#1b2130;border:0;
+    color:#c9d2e3;font-size:16px}
+  .save{height:46px;padding:0 20px;border-radius:11px;background:#5ad48b;border:0;
+    color:#0b0e14;font-size:16px;font-weight:600}
+  .body{padding:12px 14px 40px;max-width:940px;margin:0 auto}
+  .card{background:#12161f;border:1px solid #1d2331;border-radius:14px;
+    padding:14px 16px;margin-bottom:12px}
+  .card h2{margin:0 0 10px;font-size:15px;color:#8f9ab0;font-weight:600;
+    letter-spacing:.4px;text-transform:none}
+  .row{display:flex;align-items:center;gap:10px;padding:8px 0}
+  .row .k{flex:0 0 140px;font-size:15px;color:#9aa3b5}
+  .row .v{flex:1}
+  input[type=text],input[type=password]{width:100%;height:48px;border-radius:10px;
+    border:1px solid #262e40;background:#0e131c;color:#e6e9ef;padding:0 12px;
+    font-size:15px;font-family:ui-monospace,Menlo,monospace}
+  input[type=range]{width:100%;height:36px;background:transparent}
+  .val{flex:0 0 62px;text-align:right;font-size:15px;color:#c9d2e3;
+    font-family:ui-monospace,Menlo,monospace}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;height:50px;border-radius:11px;border:1px solid #262e40;
+    background:#0e131c;color:#9aa3b5;font-size:15px;font-weight:600}
+  .seg button.on{background:#1e3a2b;border-color:#3fa96b;color:#5ad48b}
+  .hint{margin:8px 0 0;font-size:14px;line-height:1.6;color:#6b7690}
+  .hint b{color:#f2c14e;font-weight:600}
+  .btn{height:50px;border-radius:11px;border:1px solid #2b3446;background:#161c28;
+    color:#c9d2e3;font-size:15px;padding:0 18px}
+  .btn.p{background:#1b2a45;border-color:#33507e;color:#8fb6ff}
+  .sel{height:50px;border-radius:11px;border:1px solid #2b3446;background:#161c28;
+    color:#c9d2e3;font-size:14px;padding:0 8px}
+  .kv{font-size:14px;color:#8f9ab0;font-family:ui-monospace,Menlo,monospace;
+    line-height:1.7}
+  .sw{position:relative;width:64px;height:36px;border-radius:18px;background:#242c3c;
+    border:0;flex:0 0 64px}
+  .sw i{position:absolute;top:3px;left:3px;width:30px;height:30px;border-radius:50%;
+    background:#6b7690;transition:.16s}
+  .sw.on{background:#1e3a2b}
+  .sw.on i{left:31px;background:#5ad48b}
+  #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+    background:#1e3a2b;color:#5ad48b;font-size:15px;padding:9px 16px;border-radius:10px;
+    opacity:0;transition:.2s;pointer-events:none;z-index:220}
+  #toast.show{opacity:1}
+
+  /* 进入设置前的密码锁 */
+  #lock{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    background:#0b0e14;padding:20px}
+  #lock.hide{display:none}
+  .lockcard{width:100%;max-width:360px;text-align:center}
+  .lockttl{font-size:21px;font-weight:600;color:#e6e9ef}
+  .locksub{margin-top:8px;font-size:15px;color:#8d96aa}
+  .dots{display:flex;justify-content:center;gap:14px;margin:28px 0 22px}
+  .dots i{width:16px;height:16px;border-radius:50%;background:#242c3c;border:1px solid #39445a}
+  .dots i.on{background:#5ad48b;border-color:#5ad48b}
+  .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .keypad button{height:58px;border-radius:12px;border:1px solid #262e40;background:#161c28;
+    color:#e6e9ef;font-size:23px;font-family:ui-monospace,Menlo,monospace}
+  .keypad button:active{background:#1e3a2b}
+  .keypad button.fn{font-size:16px;color:#9aa3b5}
+  .lockerr{margin-top:14px;height:22px;font-size:14px;color:#f06d6d}
+</style>
+</head>
+<body>
+<div class="top">
+  <button class="back" id="back">← 返回</button>
+  <h1>设置</h1>
+  <button class="save" id="save">保存</button>
+</div>
+
+<div class="body">
+
+  <div class="card">
+    <h2>小智连接</h2>
+    <div class="row"><div class="k">接入点</div><div class="v">
+      <input type="text" id="endpoint" placeholder="wss://api.tenclass.net/xiaozhi/v1/"></div></div>
+    <div class="row"><div class="k">Token</div><div class="v">
+      <input type="password" id="token" placeholder="留空即可 · 由 OTA 自动下发"></div></div>
+    <div class="row"><div class="k">Device-Id</div><div class="v" style="display:flex;gap:8px">
+      <input type="text" id="deviceId" placeholder="MAC，形如 48:F3:F3:78:55:8A">
+      <button class="btn" id="genId">用本机</button></div></div>
+    <div class="row"><div class="k">Client-Id</div><div class="v">
+      <input type="text" id="clientId"></div></div>
+    <div class="row"><div class="k">设备绑定</div><div class="v" style="display:flex;gap:8px;align-items:center">
+      <span class="kv" id="bindState" style="flex:1">未检测</span>
+      <button class="btn" id="otaCheck">检测</button></div></div>
+    <p class="hint">和 ESP32 固件一样：<b>Token 留空</b>，主界面点「开始对话」时会自动请求 OTA。未绑定时主界面大字显示 6 位验证码，到 <b>xiaozhi.me</b> 控制台输入，绑完自动连上。只有自建服务端才需要手填 token。</p>
+  </div>
+
+  <div class="card">
+    <h2>交互模式</h2>
+    <div class="seg" id="modeSeg">
+      <button data-m="half">半双工（默认）</button>
+      <button data-m="full">全双工</button>
+    </div>
+    <p class="hint" id="modeHint">半双工：TTS 播放时暂停上行，播完再开麦。原生版已改用 VOICE_COMMUNICATION 通路尝试启用 MTK DSP 硬件 AEC，ERLE 以主界面 AEC 实验实测为准。</p>
+  </div>
+
+  <div class="card">
+    <h2>音频</h2>
+    <div class="row"><div class="k">应用音量</div><div class="v"><input type="range" id="volume" min="0" max="100" step="5"></div><div class="val" id="volumeV">80%</div></div>
+    <div class="row"><div class="k">上行增益</div><div class="v"><input type="range" id="micGain" min="1" max="8" step="0.5"></div><div class="val" id="micGainV">1.0x</div></div>
+    <div class="row"><div class="k">抖动缓冲</div><div class="v"><input type="range" id="jitterMs" min="100" max="300" step="10"></div><div class="val" id="jitterV">200</div></div>
+    <p class="hint">应用音量只影响本应用播放，不改系统音量。<b>抖动缓冲不要低于 150ms</b>，100ms 会频繁欠载。</p>
+  </div>
+
+  <div class="card">
+    <h2>显示</h2>
+    <div class="row"><div class="k">软件调光</div><div class="v"><input type="range" id="dim" min="30" max="100" step="5"></div><div class="val" id="dimV">100%</div></div>
+    <div class="row"><div class="k">屏幕常亮</div><div class="v"><button class="sw" id="wakeLock"><i></i></button></div></div>
+    <div class="row"><div class="k">显示调试信息</div><div class="v"><button class="sw" id="showDebug"><i></i></button></div></div>
+    <p class="hint">系统亮度写在 <code>/sys/class/leds/lcd-backlight</code>，属 <b>system:system</b>，Termux 无权限，因此用遮罩做软件调光。常亮走 Wake Lock API，播放期间有效。关闭「显示调试信息」会隐藏主界面最下方的电平条与状态行，画面更干净。</p>
+  </div>
+
+  <div class="card">
+    <h2>网络</h2>
+    <div class="row"><div class="k">当前状态</div><div class="v kv" id="netInfo">读取中…</div></div>
+    <div class="row"><div class="k">Wi-Fi 设置</div><div class="v" style="display:flex;gap:8px">
+      <button class="btn p" id="openWifi">打开系统 Wi-Fi 面板</button>
+      <select id="autoBack" class="sel">
+        <option value="60">60s 自动返回</option>
+        <option value="90" selected>90s 自动返回</option>
+        <option value="120">120s 自动返回</option>
+        <option value="0">不自动返回</option>
+      </select></div></div>
+    <p class="hint">这块面板是本机定制的 Settings，<b>既没有返回键也没有返回按钮</b>，<code>input keyevent</code> 又会被内存回收杀掉。所以打开后由 Python 计时，到点自动把浏览器切回前台；选网、输密码没弄完就把秒数调大。</p>
+  </div>
+
+  <div class="card">
+    <h2>本机限制（实测）</h2>
+    <div class="kv" id="limits">
+      亮度写入 · 无权限（backlight 属 system）<br>
+      系统音量 · <code>cmd media_session</code> 本 ROM 未实现<br>
+      屏幕超时 · <code>settings put</code> 缺 MANAGE_USERS<br>
+      Wi-Fi 切换 · <code>cmd wifi</code> 拒绝 uid 10036<br>
+      按键注入 · <code>input keyevent</code> 被 OOM 杀掉
+    </div>
+  </div>
+
+</div>
+<div id="lock">
+  <div class="lockcard">
+    <div class="lockttl">输入密码</div>
+    <div class="locksub">6 位数字密码，进入设置</div>
+    <div class="dots" id="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="keypad" id="keypad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button class="fn" data-k="clear">清空</button><button data-k="0">0</button><button class="fn" data-k="del">删除</button>
+    </div>
+    <div class="lockerr" id="lockErr"></div>
+  </div>
+</div>
+<div id="dimLayer" style="position:fixed;inset:0;background:#000;pointer-events:none;opacity:0;z-index:98"></div>
+<div id="toast"></div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var S = null, mode = 'half', wake = true, showDbg = true;
+  var hasNative = (typeof window.Native !== 'undefined');
+
+  // -------- 进入设置密码（固定 159357）--------
+  var LOCK_PWD = '159357', pin = '';
+  function paintPin(){
+    Array.prototype.forEach.call($('dots').children, function(d, i){
+      d.className = i < pin.length ? 'on' : '';
+    });
+  }
+  function checkPin(){
+    if (pin.length < 6) return;
+    if (pin === LOCK_PWD){
+      $('lock').classList.add('hide');
+      pin = ''; paintPin();
+    } else {
+      $('lockErr').textContent = '密码不对，请重试';
+      pin = ''; paintPin();
+      setTimeout(function(){ $('lockErr').textContent = ''; }, 1500);
+    }
+  }
+  function pressKey(k){
+    $('lockErr').textContent = '';
+    if (k === 'clear') pin = '';
+    else if (k === 'del') pin = pin.slice(0, -1);
+    else if (/^[0-9]$/.test(k) && pin.length < 6) pin += k;
+    paintPin(); checkPin();
+  }
+  Array.prototype.forEach.call($('keypad').children, function(b){
+    b.onclick = function(){ pressKey(b.dataset.k); };
+  });
+  document.addEventListener('keydown', function(e){
+    if ($('lock').classList.contains('hide')) return;
+    if (/^[0-9]$/.test(e.key)) pressKey(e.key);
+    else if (e.key === 'Backspace') pressKey('del');
+  });
+  paintPin();
+
+  function toast(t){
+    var el = $('toast');
+    el.textContent = t; el.className = 'show';
+    clearTimeout(el._t); el._t = setTimeout(function(){ el.className = ''; }, 1600);
+  }
+
+  function paintSeg(){
+    Array.prototype.forEach.call($('modeSeg').children, function(b){
+      b.className = (b.dataset.m === mode) ? 'on' : '';
+    });
+    $('modeHint').innerHTML = (mode === 'half')
+      ? '半双工：TTS 播放时暂停上行，播完再开麦。原生版已改用 VOICE_COMMUNICATION 通路尝试启用 MTK DSP 硬件 AEC，ERLE 以主界面 AEC 实验实测为准。'
+      : '<b>全双工已选</b>：麦克风全程采集，TTS 播放中也能打断。若 AEC 实验测得 ERLE 偏低，自听与自激风险由使用环境决定，出现啸叫请切回半双工。';
+  }
+
+  function paintWake(){
+    $('wakeLock').className = 'sw' + (wake ? ' on' : '');
+  }
+
+  function paintDbg(){
+    $('showDebug').className = 'sw' + (showDbg ? ' on' : '');
+  }
+
+  function fill(){
+    $('endpoint').value = S.xiaozhi.endpoint || '';
+    $('token').value = S.xiaozhi.token || '';
+    $('deviceId').value = S.xiaozhi.deviceId || '';
+    $('clientId').value = S.xiaozhi.clientId || '';
+
+    mode = S.ui.mode === 'full' ? 'full' : 'half';
+    wake = !!S.ui.wakeLock;
+    showDbg = S.ui.showDebug !== false;   // 老配置默认显示
+    paintSeg(); paintWake(); paintDbg();
+
+    $('volume').value = S.audio.volume;
+    $('volumeV').textContent = S.audio.volume + '%';
+    $('micGain').value = S.audio.micGain;
+    $('micGainV').textContent = (+S.audio.micGain).toFixed(1) + 'x';
+    $('jitterMs').value = S.audio.jitterMs;
+    $('jitterV').textContent = S.audio.jitterMs;
+
+    $('dim').value = S.ui.dim;
+    $('dimV').textContent = S.ui.dim + '%';
+    $('dimLayer').style.opacity = (100 - S.ui.dim) / 100;
+  }
+
+  $('volume').oninput = function(){ $('volumeV').textContent = this.value + '%'; };
+  $('micGain').oninput = function(){ $('micGainV').textContent = (+this.value).toFixed(1) + 'x'; };
+  $('jitterMs').oninput = function(){ $('jitterV').textContent = this.value; };
+  $('dim').oninput = function(){
+    $('dimV').textContent = this.value + '%';
+    $('dimLayer').style.opacity = (100 - this.value) / 100;
+  };
+
+  Array.prototype.forEach.call($('modeSeg').children, function(b){
+    b.onclick = function(){ mode = b.dataset.m; paintSeg(); };
+  });
+  $('wakeLock').onclick = function(){ wake = !wake; paintWake(); };
+  $('showDebug').onclick = function(){ showDbg = !showDbg; paintDbg(); };
+
+  $('back').onclick = function(){ location.href = 'index.html'; };
+
+  function loadNet(){
+    callNative('sysinfo').then(function(n){
+      $('netInfo').innerHTML =
+        'IP ' + (n.ip || '—') + '<br>' +
+        '信号 ' + (n.signal === null ? '—' : n.signal + ' dBm') + '<br>' +
+        'MAC ' + (n.mac || '—');
+    }).catch(function(){ $('netInfo').textContent = '读取失败'; });
+  }
+
+  $('genId').onclick = function(){
+    callNative('sysinfo').then(function(n){
+      var mac = (n.mac || '').toUpperCase();
+      if (mac) { $('deviceId').value = mac; toast('已用本机 MAC 生成'); }
+      else toast('读不到 MAC');
+    });
+  };
+
+  $('otaCheck').onclick = function(){
+    $('bindState').textContent = '检测中…';
+    callNative('ota').then(function(r){
+      if (!r.ok){
+        $('bindState').textContent = 'OTA 失败 ' + (r.status || '') + ' ' + (r.err || '');
+        return;
+      }
+      var a = r.activation || {};
+      if (a.code){
+        $('bindState').innerHTML = '未绑定 · 控制台输入 <b>' + a.code + '</b>';
+        toast('验证码 ' + a.code + '，去 xiaozhi.me 绑定');
+      } else {
+        $('bindState').textContent = '已绑定 ✓ 固件 ' + (r.fw || '-');
+        toast('设备已绑定');
+      }
+    }).catch(function(e){ $('bindState').textContent = '请求失败 ' + e.message; });
+  };
+
+  $('openWifi').onclick = function(){
+    var sec = +$('autoBack').value;
+    toast(sec ? ('已打开面板，' + sec + ' 秒后自动切回') : '正在拉起系统面板…');
+    if (hasNative){
+      try { window.Native.openWifi(); toast('已打开系统 Wi-Fi 面板'); }
+      catch(e){ toast('打开失败：' + e.message); }
+      return;
+    }
+    fetch('/api/open', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({target:'wifi', autoBack: sec})})
+      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.ok) { toast(sec ? ('已打开，' + sec + ' 秒后自动返回') : '已打开系统 Wi-Fi 面板'); return; }
+        var why = (r.err || r.out || '').split('\n')[0].slice(0, 60);
+        toast('打开失败：' + (why || '未知原因'));
+      })
+      .catch(function(e){ toast('请求失败：' + e.message); });
+  };
+
+  $('save').onclick = function(){
+    var body = {
+      xiaozhi: {
+        endpoint: $('endpoint').value.trim(),
+        token: $('token').value.trim(),
+        deviceId: $('deviceId').value.trim(),
+        clientId: $('clientId').value.trim()
+      },
+      audio: {
+        volume: +$('volume').value,
+        micGain: +$('micGain').value,
+        jitterMs: +$('jitterMs').value
+      },
+      ui: { mode: mode, dim: +$('dim').value, wakeLock: wake, showDebug: showDbg }
+    };
+    if (hasNative){
+      try {
+        window.Native.saveSettings(JSON.stringify(body));
+        toast('已保存');
+        setTimeout(function(){ location.href='index.html'; }, 700);
+      } catch(e){ toast('保存失败'); }
+      return;
+    }
+    fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)})
+      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.ok){ toast('已保存'); setTimeout(function(){ location.href='index.html'; }, 700); }
+        else toast('保存失败');
+      })
+      .catch(function(){ toast('保存失败'); });
+  };
+
+  // ---------------- 原生 Bridge 适配 ----------------
+  /**
+   * 统一走原生；没有原生时回落到本地 Python 服务（PC 预览用）。
+   */
+  function callNative(kind){
+    if (hasNative){
+      try {
+        if (kind === 'sysinfo') return Promise.resolve(JSON.parse(window.Native.getSysInfo()));
+        if (kind === 'ota')    return Promise.resolve(JSON.parse(window.Native.otaCheck()));
+        if (kind === 'settings') return Promise.resolve(JSON.parse(window.Native.getSettings()));
+      } catch(e){
+        return Promise.reject(e);
+      }
+    }
+    if (kind === 'sysinfo')  return fetch('/api/sysinfo').then(function(r){ return r.json(); });
+    if (kind === 'ota')      return fetch('/api/xz/ota').then(function(r){ return r.json(); });
+    if (kind === 'settings') return fetch('/api/settings').then(function(r){ return r.json(); });
+    return Promise.reject(new Error('unknown call'));
+  }
+
+  callNative('settings').then(function(s){
+    S = s; fill(); loadNet();
+  }).catch(function(){
+    toast('读不到本地配置');
+  });
+})();
+</script>
+</body>
+</html>

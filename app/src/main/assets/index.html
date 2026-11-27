@@ -2,43 +2,406 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>硬件自检 Bridge 版</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>小度 · 语音终端</title>
 <style>
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body { margin:0; background:#181818; color:#fff; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; padding:20px; }
-  h1 { font-size:20px; margin:0 0 4px; }
-  .hint { color:#aaa; font-size:13px; margin-bottom:18px; line-height:1.5; }
-  .btn { display:block; width:100%; padding:15px; margin-bottom:12px; font-size:16px;
-         border:0; border-radius:10px; background:#e0e0e0; color:#111; cursor:pointer; }
-  .btn:active { background:#bcbcbc; }
-  #status { font-size:16px; line-height:1.6; margin:16px 0; padding:12px;
-            background:#232323; border-radius:8px; min-height:48px; }
-  #cam { display:none; width:100%; height:260px; margin-top:12px;
-         background:#2a2a2a; border-radius:10px; }
-  .tag { font-size:12px; color:#777; margin-top:20px; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#0b0e14;color:#e6e9ef;
+    font-family:-apple-system,"Noto Sans SC",sans-serif;overflow:hidden}
+  .wrap{height:100%;display:flex;flex-direction:column;position:relative}
+
+  .top{display:flex;align-items:center;gap:10px;padding:8px 14px;
+    background:#12161f;border-bottom:1px solid #1d2331}
+  .dot{width:9px;height:9px;border-radius:50%;background:#555e70;flex:0 0 auto}
+  .dot.on{background:#5ad48b;box-shadow:0 0 8px #5ad48b}
+  .dot.err{background:#f06d6d}
+  .chip{font-size:11px;color:#9aa3b5;background:#1b2130;border-radius:7px;padding:4px 8px}
+  .sp{flex:1}
+  .gear{width:42px;height:42px;border-radius:12px;background:#1b2130;border:0;
+    color:#c9d2e3;font-size:19px;line-height:42px;text-align:center;padding:0}
+
+  /* 中央舞台：头像 + 圆形按钮；对话气泡浮在上半区 */
+  .stage{flex:1;position:relative;overflow:hidden;
+    display:flex;align-items:center;justify-content:center}
+  .talk{position:absolute;top:0;left:0;right:0;height:52%;z-index:4;
+    overflow:auto;padding:12px 16px;display:flex;flex-direction:column;
+    gap:10px;justify-content:flex-end}
+  .hero{display:flex;flex-direction:column;align-items:center;gap:18px;
+    transform:translateY(3%)}
+  .avatar{width:336px;height:336px;border-radius:50%;position:relative;overflow:hidden;
+    background:radial-gradient(circle at 50% 35%,#2b3d63,#141d30 72%);
+    box-shadow:0 0 0 1px #2c3a56,0 20px 60px rgba(0,0,0,.6)}
+  #lottieBox{width:100%;height:100%}
+  #lottieBox svg{width:100%!important;height:100%!important;display:block}
+  .avatar::after{content:"";position:absolute;inset:-12px;border-radius:50%;
+    border:3px solid rgba(90,212,139,.45);opacity:0;pointer-events:none}
+  .stage.speaking .avatar::after{animation:halo 1.4s ease-out infinite}
+  .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 20px 60px rgba(0,0,0,.6),
+               0 0 48px rgba(90,212,139,.28)}
+  @keyframes halo{0%{transform:scale(.94);opacity:.7}100%{transform:scale(1.18);opacity:0}}
+  .round{width:76px;height:76px;border-radius:50%;border:0;padding:0;
+    background:#5ad48b;color:#0b0e14;display:flex;align-items:center;
+    justify-content:center;box-shadow:0 8px 28px rgba(90,212,139,.28)}
+  .round svg{width:32px;height:32px;fill:currentColor}
+  .round.stop{background:#f06d6d;box-shadow:0 8px 28px rgba(240,109,109,.30)}
+  .round:disabled{opacity:.45}
+  .msg{position:relative;max-width:64%;padding:10px 14px;border-radius:16px;
+    font-size:15px;line-height:1.55;word-break:break-word;
+    box-shadow:0 6px 18px rgba(0,0,0,.28)}
+  .msg::before{content:"";position:absolute;bottom:0;width:10px;height:14px}
+  .msg.ai{background:#1f2a3d;border-top-left-radius:5px;align-self:flex-start;color:#e6e9ef}
+  .msg.ai::before{left:-8px;background:#1f2a3d;clip-path:polygon(100% 0,100% 100%,0 100%)}
+  .msg.me{background:#235c3d;border-top-right-radius:5px;align-self:flex-end;color:#eaf7ef}
+  .msg.me::before{right:-8px;background:#235c3d;clip-path:polygon(0 0,100% 100%,0 100%)}
+  .msg.sys{background:rgba(11,14,20,.72);color:#8d96aa;font-size:12px;align-self:center;
+    padding:4px 10px;border-radius:10px;text-align:center;box-shadow:none}
+  .msg.sys::before{display:none}
+
+  .bars{padding:0 16px 4px}
+  .note{min-height:16px;margin-bottom:4px;font-size:12px;color:#8d96aa;
+    text-align:center;line-height:1.4}
+  .lvl{height:8px;border-radius:4px;background:#1b2130;overflow:hidden}
+  .lvl i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#3fa96b,#5ad48b);
+    transition:width .08s linear}
+  .dbg{margin-top:5px;font-size:11px;color:#6b7690;font-family:ui-monospace,Menlo,monospace}
+
+  #dim{position:fixed;inset:0;background:#000;pointer-events:none;opacity:0;z-index:100}
+
+  /* 未绑定时的验证码面板 */
+  #act{position:fixed;inset:0;z-index:120;display:none;padding:26px;
+    background:rgba(8,11,17,.95);align-items:center;justify-content:center}
+  #act.show{display:flex}
+  .actcard{width:100%;max-width:460px;text-align:center}
+  .actbrand{font-size:12px;letter-spacing:.2em;color:#6b7690;text-transform:uppercase}
+  .actttl{margin-top:10px;font-size:17px;font-weight:600;color:#e6e9ef}
+  .actcode{margin:20px 0 6px;font-family:ui-monospace,Menlo,monospace;font-size:62px;
+    font-weight:700;letter-spacing:.2em;color:#5ad48b;line-height:1.1;
+    text-shadow:0 0 26px rgba(90,212,139,.35)}
+  .actrule{height:1px;background:#1d2331;margin:18px 0}
+  .acthint{font-size:13px;color:#aab2c4;line-height:1.8}
+  .acthint b{color:#8fb6ff;font-weight:600}
+  .actwait{margin-top:18px;font-size:12px;color:#6b7690;
+    display:flex;align-items:center;justify-content:center;gap:7px}
+  .spin{width:11px;height:11px;border:2px solid #2a3344;border-top-color:#5ad48b;
+    border-radius:50%;animation:sp .9s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* AEC 通路实验面板 */
+  #aec{position:fixed;inset:0;z-index:150;display:none;flex-direction:column;
+    background:#0b0e14;padding:12px 14px}
+  #aec.show{display:flex}
+  .aectop{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .aectop h2{flex:1;margin:0;font-size:16px;font-weight:600}
+  .abtn{height:44px;padding:0 16px;border-radius:11px;border:1px solid #33507e;
+    background:#1b2a45;color:#8fb6ff;font-size:14px;font-weight:600}
+  .aresult{margin-bottom:8px;padding:9px 12px;border-radius:10px;
+    background:#12161f;border:1px solid #1d2331;font-size:12px;
+    font-family:ui-monospace,Menlo,monospace;color:#9aa3b5;line-height:1.7}
+  .aresult b{color:#e6e9ef}
+  .aresult.good{border-color:#3fa96b;color:#8fe0b0}
+  .aresult.bad{border-color:#8a3b3b;color:#f0a0a0}
 </style>
 </head>
 <body>
-  <h1>硬件自检 · Bridge 版</h1>
-  <div class="hint">界面是 HTML（可浏览器实时预览）<br>硬件功能走 JS Bridge 调原生</div>
+<div class="wrap">
+  <div class="top">
+    <div class="dot" id="dot"></div>
+    <div class="chip" id="chipMode">未连接</div>
+    <div class="sp"></div>
+    <button class="gear" id="gear">⚙</button>
+  </div>
 
-  <button class="btn" onclick="Native.testSpeaker()">① 测喇叭（1kHz 蜂鸣 2 秒）</button>
-  <button class="btn" onclick="Native.testMic()">② 测麦克风（录 3 秒 → 回放）</button>
-  <button class="btn" onclick="Native.toggleCamera()">③ 测摄像头（开/关预览）</button>
+  <div class="stage" id="stage">
+    <div class="talk" id="talk"></div>
+    <div class="hero">
+      <div class="avatar"><div id="lottieBox"></div></div>
+      <button class="round" id="btn" aria-label="开始通话">
+        <svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>
+      </button>
+    </div>
+  </div>
 
-  <div id="status">点按钮开始（首次会弹权限，选允许）</div>
-  <div id="cam"></div>
-  <div class="tag">包名 com.example.hwbridge · 与上版可共存</div>
+  <div class="bars" id="bars">
+    <div class="note" id="note"></div>
+    <div class="lvl"><i id="lvl"></i></div>
+    <div class="dbg" id="dbg">—</div>
+  </div>
+</div>
 
+<div id="act">
+  <div class="actcard">
+    <div class="actbrand">Xiaozhi</div>
+    <div class="actttl">这台设备还没有绑定</div>
+    <div class="actcode" id="actCode">------</div>
+    <div class="actrule"></div>
+    <div class="acthint">
+      打开 <b>xiaozhi.me</b> 控制台 → 添加设备 → 输入上面这 6 位数字<br>
+      绑定成功后会自动连上，不用做别的
+    </div>
+    <div class="actwait"><span class="spin"></span><span id="actSub">等待绑定…</span></div>
+  </div>
+</div>
+
+<div id="aec">
+  <div class="aectop">
+    <h2>AEC 通路实验</h2>
+    <button class="abtn" id="aecRun">跑矩阵</button>
+    <button class="abtn" id="aecClose">关闭</button>
+  </div>
+  <div class="note" style="margin-bottom:8px;text-align:left">
+    验证原生 VOICE_COMMUNICATION 能否启用 MTK DSP 的硬件 AEC。<br>
+    ERLE = 参考电平 − 残余回声电平；越大越好，&lt;5dB 视为无效。
+  </div>
+  <div id="aecOut" style="flex:1;overflow:auto"></div>
+</div>
+
+<div id="dim"></div>
+
+<script src="lottie.min.js"></script>
 <script>
-  // 原生通过这个回调把状态写回页面
-  function setStatus(text) {
-    document.getElementById('status').textContent = text;
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var dot = $('dot'), chipMode = $('chipMode'), talk = $('talk'), lvl = $('lvl'),
+      dbg = $('dbg'), btn = $('btn'), gear = $('gear'), dim = $('dim'),
+      stage = $('stage'), act = $('act'), actCode = $('actCode'), actSub = $('actSub'),
+      bars = $('bars'), noteEl = $('note'), aecPanel = $('aec'), aecOut = $('aecOut');
+
+  var ICON_CALL = '<svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>';
+  var ICON_HANGUP = '<svg viewBox="0 0 24 24" style="transform:rotate(135deg)"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.1 21 3 13.9 3 5a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.2.2 2.4.6 3.6a1 1 0 0 1-.2 1.1l-2.3 2.1z"/></svg>';
+
+  var S = null;
+  var running = false;
+  var t0 = 0;
+
+  // ---------------- 情绪表情 ----------------
+  var EMOTIONS = ['neutral','happy','laughing','funny','sad','angry','crying',
+    'loving','embarrassed','surprised','shocked','thinking','winking','cool',
+    'relaxed','delicious','kissy','confident','sleepy','silly','confused'];
+  var EMOJI2EMO = {
+    '1f636':'neutral','1f642':'happy','1f60a':'happy','1f606':'laughing',
+    '1f602':'funny','1f614':'sad','1f620':'angry','1f62d':'crying',
+    '1f60d':'loving','1f633':'embarrassed','1f62f':'surprised','1f631':'shocked',
+    '1f914':'thinking','1f609':'winking','1f60e':'cool','1f60c':'relaxed',
+    '1f924':'delicious','1f618':'kissy','1f60f':'confident','1f634':'sleepy',
+    '1f61c':'silly','1f644':'confused'
+  };
+  var emoAnim = null, emoNow = '', emoLoad = 0, emoTimer = null;
+  function emojiOf(text){
+    if (!text) return '';
+    var cps = Array.from(text).map(function(c){ return c.codePointAt(0).toString(16); });
+    for (var i = 0; i < cps.length; i++){ if (EMOJI2EMO[cps[i]]) return EMOJI2EMO[cps[i]]; }
+    return '';
   }
-  function showCam(on) {
-    document.getElementById('cam').style.display = on ? 'block' : 'none';
+  function setEmotion(name, holdMs){
+    name = (EMOTIONS.indexOf(name) >= 0) ? name : 'neutral';
+    if (emoTimer){ clearTimeout(emoTimer); emoTimer = null; }
+    if (holdMs > 0){ emoTimer = setTimeout(function(){ setEmotion('neutral'); }, holdMs); }
+    if (name === emoNow && emoAnim) return;
+    emoNow = name;
+    var seq = ++emoLoad;
+    fetch('emoji/' + name + '.json').then(function(r){ return r.json(); })
+      .then(function(data){
+        if (seq !== emoLoad) return;
+        if (emoAnim) emoAnim.destroy();
+        emoAnim = lottie.loadAnimation({
+          container: $('lottieBox'), renderer: 'svg',
+          loop: true, autoplay: true, animationData: data
+        });
+      }).catch(function(){});
   }
+
+  function msg(text, cls){
+    var d = document.createElement('div');
+    d.className = 'msg ' + (cls || 'sys');
+    d.textContent = text;
+    talk.appendChild(d);
+    talk.scrollTop = talk.scrollHeight;
+    while (talk.children.length > 40) talk.removeChild(talk.firstChild);
+  }
+  function note(text){ noteEl.textContent = text || ''; }
+  function setMode(text, cls){
+    chipMode.textContent = text;
+    dot.className = 'dot' + (cls ? ' ' + cls : '');
+  }
+
+  function applyUI(){
+    var d = (S && S.ui && typeof S.ui.dim === 'number') ? S.ui.dim : 100;
+    dim.style.opacity = (100 - d) / 100;
+    var sd = !S || !S.ui || S.ui.showDebug !== false;
+    bars.style.display = sd ? '' : 'none';
+  }
+  setEmotion('neutral');
+
+  // ---------------- 与原生通信 ----------------
+  var hasNative = (typeof window.Native !== 'undefined');
+
+  function loadSettings(){
+    if (hasNative){
+      try { return Promise.resolve(JSON.parse(window.Native.getSettings())); }
+      catch(e){ return Promise.resolve(null); }
+    }
+    return Promise.resolve(null);
+  }
+  function saveSettings(obj){
+    if (hasNative){
+      try { window.Native.saveSettings(JSON.stringify(obj)); } catch(e){}
+    }
+    return Promise.resolve({ok:true});
+  }
+  window.xzSaveSettings = saveSettings;
+
+  loadSettings().then(function(s){
+    if (s){ S = s; applyUI(); }
+    setMode('待连接');
+  });
+
+  gear.onclick = function(){ location.href = 'settings.html'; };
+
+  // ---------------- 原生事件入口 ----------------
+  window.onNativeEvent = function(type, payload){
+    var p = payload || {};
+    switch(type){
+      case 'ready':
+        act.classList.remove('show');
+        setMode('小智 · 已连接', 'on');
+        note('通道就绪 · 下行 ' + ((p.downRate||24000)/1000) + 'kHz');
+        break;
+      case 'net':
+        note(p.text || '');
+        break;
+      case 'error':
+        note(p.text || '出错了');
+        setMode('连接异常', 'err');
+        break;
+      case 'stt':
+        if (p.text) msg(p.text, 'me');
+        setMode('小智 · 识别中', 'on');
+        break;
+      case 'llm':
+        setEmotion(p.emotion || emojiOf(p.text));
+        setMode('小智 · 思考中', 'on');
+        break;
+      case 'tts':
+        if (p.state === 'start'){
+          stage.classList.add('speaking');
+          setMode('小智 · 说话中', 'on');
+        } else if (p.state === 'sentence_start'){
+          if (p.text) msg(p.text, 'ai');
+        } else if (p.state === 'stop'){
+          stage.classList.remove('speaking');
+          setMode('小智 · 已连接', 'on');
+          setEmotion('neutral');
+        }
+        break;
+      case 'activate':
+        if (p.state === 'done'){
+          act.classList.remove('show');
+          note('设备已绑定 · 正在连接小智');
+        } else {
+          var c = String(p.code || '');
+          actCode.textContent = c.length === 6 ? c.slice(0,3) + ' ' + c.slice(3) : (c || '------');
+          actSub.textContent = '等待绑定… 绑定后自动连接';
+          act.classList.add('show');
+          setMode('待绑定', 'err');
+        }
+        break;
+      case 'goodbye':
+        note('小智已挂断');
+        stop();
+        break;
+      case 'mode':
+        if (S){ S.ui = S.ui || {}; S.ui.mode = p.mode; }
+        break;
+      case 'aec':
+        addAecResult(p);
+        break;
+      case 'aecDone':
+        var d = document.createElement('div');
+        d.className = 'aresult';
+        d.innerHTML = '<b>矩阵完成</b>';
+        aecOut.appendChild(d);
+        break;
+    }
+  };
+
+  // ---------------- 启动/停止 ----------------
+  function start(){
+    if (running) return;
+    running = true;
+    t0 = Date.now();
+    btn.innerHTML = ICON_HANGUP;
+    btn.className = 'round stop';
+    btn.setAttribute('aria-label', '挂断通话');
+    if (hasNative){
+      try { window.Native.start(); } catch(e){ note('启动失败：' + e.message); }
+    }
+    note('已开始 · 说话试试');
+  }
+  function stop(){
+    running = false;
+    stage.classList.remove('speaking');
+    if (hasNative){
+      try { window.Native.stop(); } catch(e){}
+    }
+    btn.innerHTML = ICON_CALL;
+    btn.className = 'round';
+    btn.setAttribute('aria-label', '开始通话');
+    setMode('已停止');
+  }
+  btn.onclick = function(){ running ? stop() : start(); };
+
+  // ---------------- AEC 通路实验 ----------------
+  function addAecResult(p){
+    var d = document.createElement('div');
+    var erle = p.erle;
+    var cls = 'aresult';
+    if (typeof erle === 'number'){
+      if (erle >= 10) cls += ' good';
+      else if (erle < 5) cls += ' bad';
+    }
+    d.className = cls;
+    var txt = '<b>' + (p.name||'') + '</b><br>';
+    txt += '参考 ' + num(p.refDb) + ' dBFS · 残余 ' + num(p.echoDb) + ' dBFS';
+    if (typeof erle === 'number') txt += ' · <b>ERLE ' + erle.toFixed(1) + ' dB</b>';
+    if (p.note) txt += '<br>' + p.note;
+    d.innerHTML = txt;
+    aecOut.appendChild(d);
+    aecOut.scrollTop = aecOut.scrollHeight;
+  }
+  function num(v){
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    return Number(v).toFixed(1);
+  }
+  $('aecRun').onclick = function(){
+    aecOut.innerHTML = '';
+    if (hasNative){
+      try { window.Native.runAecMatrix(); } catch(e){ note('AEC 测试启动失败'); }
+    } else {
+      aecOut.innerHTML = '<div class="aresult">AEC 实验需要原生环境（Bridge）</div>';
+    }
+  };
+  $('aecClose').onclick = function(){ aecPanel.classList.remove('show'); };
+  // 长按齿轮 800ms 打开 AEC 实验面板
+  var gearTimer = null;
+  gear.addEventListener('touchstart', function(){
+    gearTimer = setTimeout(function(){ aecPanel.classList.add('show'); }, 800);
+  }, {passive:true});
+  gear.addEventListener('touchend', function(){ clearTimeout(gearTimer); }, {passive:true});
+
+  // ---------------- 状态刷新 ----------------
+  setInterval(function(){
+    if (!hasNative) return;
+    var path;
+    try { path = JSON.parse(window.Native.getAudioPath()); } catch(e){ return; }
+    lvl.style.width = Math.min(100, (path.level||0)).toFixed(0) + '%';
+    dbg.textContent = '通路 src=' + path.src + ' use=' + path.usage + ' mode=' + path.mode
+      + (path.muted ? ' · 静音' : '')
+      + (path.running ? ' · 运行中' : ' · 停止');
+  }, 500);
+})();
 </script>
 </body>
 </html>
