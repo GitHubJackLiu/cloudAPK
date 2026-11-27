@@ -246,12 +246,10 @@ public class UpdateChecker {
                 return out;
             }
 
-            // 拉起必须在 pm install 之前排队：
+            // 拉起交给 BootReceiver 的 ACTION_MY_PACKAGE_REPLACED：
             // pm install -r 覆盖安装会立刻杀掉本进程（codePath changed），
-            // install 之后的代码全是死代码，restartApp 放后面永远不执行。
-            // 先用 setsid 排一条独立的延迟 am start，即使本进程马上被杀，
-            // 这条命令也能在 8 秒后（安装早已完成）把新版本拉回前台。
-            restartApp();
+            // 进程内任何拉起代码都是死代码（setsid/am start 实测无效）。
+            // 系统装完会主动发 MY_PACKAGE_REPLACED 广播拉起进程，由它 startActivity。
 
             String res = su("pm install -r " + path);
             Log.i(TAG, "pm install: " + clip(res, 200));
@@ -310,33 +308,6 @@ public class UpdateChecker {
             if (p != null) try { p.destroy(); } catch (Exception ignored) { }
         }
         return sb.toString();
-    }
-
-    /**
-     * 覆盖安装后拉起新版本。
-     *
-     * 实测（17:34/17:38）：pm install -r 覆盖安装会让 PackageManager 杀掉
-     * 发起安装的 App 进程（"codePath changed ... using new"），所以任何在
-     * App 线程里、需要 waitFor 的拉起都会随进程消亡而失败 —— 设备停在桌面。
-     *
-     * 解法：起一个完全独立的 su 进程执行 "sleep 3; am start ..."，
-     * 并且 Java 侧立刻返回、不 waitFor。等它 sleep 完时 App 已被系统用
-     * 新 codePath 重建，am start 把 Activity 切回前台。用 nohup + 后台 &
-     * 让这条命令脱离父进程的生命周期。
-     */
-    private void restartApp() {
-        try {
-            // setsid 让命令脱离 App 的进程组，重定向三个流避免继承管道；
-            // 这样 App 进程被覆盖安装终止时，这条命令仍能独立跑完。
-            Process p = Runtime.getRuntime().exec(new String[]{
-                    "su", "-c", "/system/bin/setsid /system/bin/sh -c "
-                            + "'sleep 8; am start -n com.xiaodu.voice/.MainActivity' "
-                            + "</dev/null >/dev/null 2>&1 &"});
-            // 不 waitFor：本进程马上会被 pm install 杀掉，等不到结果。
-            Log.i(TAG, "restart queued before install");
-        } catch (Throwable t) {
-            Log.w(TAG, "restart failed: " + t);
-        }
     }
 
     private static void put(JSONObject o, String k, Object v) {
