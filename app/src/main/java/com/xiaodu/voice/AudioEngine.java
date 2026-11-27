@@ -202,6 +202,9 @@ public class AudioEngine {
      */
     public synchronized boolean start() {
         if (running) return true;
+        // 兜底：上一轮若在 TTS 播报中挂断，muted 可能残留为 1。这里强制开麦，
+        // 否则采集线程每帧都 `if (muted!=0) continue`，用户说话上行全丢。
+        muted = 0;
         try {
             audioManager.setMode(audioMode);
             audioManager.setSpeakerphoneOn(audioMode == MODE_COMM);

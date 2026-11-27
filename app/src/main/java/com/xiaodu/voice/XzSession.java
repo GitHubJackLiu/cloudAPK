@@ -49,6 +49,10 @@ public class XzSession {
      * mqtt/udp/audio 会被上一轮的 cleanup() 清掉，而 running 留在 true，
      * 之后再点通话就被 isRunning() 静默挡掉 —— 表现就是「挂断几次后不能再通话」。 */
     private volatile boolean stopping = false;
+    /* 会话世代号：TTS stop 的延迟开麦线程、各路异步回调都带上它。
+     * 一旦挂断，gen 自增，上一轮残留的延迟动作发现世代号变了就直接作废，
+     * 不会把新会话的 muted/paused/listen 状态搞乱。 */
+    private volatile long sessionGen = 0;
     private volatile String sessionId = "";
     private volatile String publishTopic = "device-server";
     private volatile int downRate = 24000;
@@ -152,6 +156,7 @@ public class XzSession {
         // stopping 期间上一轮 cleanup 还没跑完，此时起新会话会被它清掉资源
         synchronized (lock) {
             if (stopping || !running.compareAndSet(false, true)) return;
+            sessionGen++;               // 新一轮会话，作废上一轮所有延迟动作
         }
         new Thread(this::run, "xz-session").start();
     }
@@ -169,6 +174,7 @@ public class XzSession {
         // 之前 CAS 失败直接 return，是「挂断几次后按钮卡死」的直接原因。
         synchronized (lock) {
             stopping = true;
+            sessionGen++;               // 挂断即作废上一轮 TTS 残留的延迟开麦
             return running.compareAndSet(true, false);
         }
     }
@@ -219,6 +225,10 @@ public class XzSession {
         upQ.clear();
         udpAddr = null;
         try { audio.stop(); } catch (Throwable ignored) { }
+        // 半双工：在 TTS 说话期间挂断时，上行还停在 setMuted(true)。
+        // audio.start() 不重置这个标志，下一轮采集线程会一直「if (muted!=0) continue」，
+        // 把用户语音全丢弃 —— 表现就是「下次通话检测不到我的声音」。必须在这里清掉。
+        try { audio.setMuted(false); } catch (Throwable ignored) { }
         paused = false;
         armed = false;
         upFill = 0;
@@ -525,8 +535,12 @@ public class XzSession {
                 } else if ("stop".equals(state)) {
                     // 半双工：等功放余音过去再开麦；两种模式都要补 listen start
                     final boolean half = settings.isHalfDuplex();
+                    final long gen = sessionGen;
                     new Thread(() -> {
                         try { Thread.sleep(half ? 300 : 150); } catch (InterruptedException ignored) { }
+                        // 若这 300ms 里用户挂断了，这次延迟开麦属于旧会话，
+                        // 绝不能作用到可能已经起来的新会话上。
+                        if (gen != sessionGen || !running.get()) return;
                         paused = false;
                         audio.setMuted(false);
                         // 功放余音 + 房间反射还会持续一小会儿，这段时间别判起音，
