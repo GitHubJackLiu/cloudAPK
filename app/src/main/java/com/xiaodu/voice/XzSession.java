@@ -44,6 +44,11 @@ public class XzSession {
     private Bridge bridge;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+    /* 挂断清理期的门栓：cleanup() 在 xz-stop 线程里要 join 两个音频线程、
+     * 断 MQTT，期间若用户又点通话，start() 必须被挡住，否则新会话刚建好的
+     * mqtt/udp/audio 会被上一轮的 cleanup() 清掉，而 running 留在 true，
+     * 之后再点通话就被 isRunning() 静默挡掉 —— 表现就是「挂断几次后不能再通话」。 */
+    private volatile boolean stopping = false;
     private volatile String sessionId = "";
     private volatile String publishTopic = "device-server";
     private volatile int downRate = 24000;
@@ -144,7 +149,10 @@ public class XzSession {
     // ---------------- 生命周期 ----------------
 
     public void start() {
-        if (!running.compareAndSet(false, true)) return;
+        // stopping 期间上一轮 cleanup 还没跑完，此时起新会话会被它清掉资源
+        synchronized (lock) {
+            if (stopping || !running.compareAndSet(false, true)) return;
+        }
         new Thread(this::run, "xz-session").start();
     }
 
@@ -156,17 +164,29 @@ public class XzSession {
      * 而前端已经把按钮变回绿色 —— 表现就是「挂断后再点没反应」。
      */
     public boolean beginStop() {
-        return running.compareAndSet(true, false);
+        // 不管 running 是 true 还是 false，都必须落门栓并回 stopped：
+        // 前端点挂断后一直停在「正在挂断」，就等这条事件解锁。
+        // 之前 CAS 失败直接 return，是「挂断几次后按钮卡死」的直接原因。
+        synchronized (lock) {
+            stopping = true;
+            return running.compareAndSet(true, false);
+        }
     }
 
-    /** 真正释放资源；必须在 beginStop() 成功后调用，允许放在工作线程 */
+    /** 真正释放资源；必须在 beginStop() 后调用，允许放在工作线程 */
     public void finishStop() {
-        cleanup();
-        emit("session", "{\"state\":\"stopped\"}");
+        try {
+            cleanup();
+        } finally {
+            synchronized (lock) {
+                stopping = false;   // 资源已清干净，这时才允许下一轮 start
+            }
+            emit("session", "{\"state\":\"stopped\"}");
+        }
     }
 
     public void stop() {
-        if (!beginStop()) return;
+        beginStop();
         finishStop();
     }
 

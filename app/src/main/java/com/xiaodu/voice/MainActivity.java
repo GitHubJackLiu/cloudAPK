@@ -290,7 +290,9 @@ public class MainActivity extends Activity {
         // 先同步把 running 抢下来，防止 stop 线程还没开跑时用户就又点了通话；
         // cleanup() 里要 join 采集/播放线程（各最多 400ms），放工作线程做。
         // 前端会等 session/stopped 事件才把按钮放开，所以 start 不会撞上 cleanup。
-        if (!session.beginStop()) return;
+        // 即使 already stopped 也要走 finishStop：它会回 stopped 事件，
+        // 前端正是等这条事件才把「正在挂断」的按钮放开。
+        session.beginStop();
         new Thread(session::finishStop, "xz-stop").start();
     }
 

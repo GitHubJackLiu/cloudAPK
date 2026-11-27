@@ -68,10 +68,10 @@
   /* 表情层。两层都常驻，切换只改 opacity；旧层先 pause 再淡出，
      交叉期间画面上始终有一张脸。SVG 渲染器跟 Kiwi 版一致。 */
   .facelayer{position:absolute;top:0;right:0;bottom:0;left:0;opacity:0;
-    transition:opacity .22s linear}
+    transition:opacity .16s linear}
   .facelayer svg,.facelayer canvas{width:100%!important;height:100%!important;display:block}
   .avatar::after{content:"";position:absolute;top:-12px;right:-12px;bottom:-12px;left:-12px;border-radius:50%;
-    border:3px solid rgba(90,212,139,.45);opacity:0;pointer-events:none;
+    border:3px solid rgba(90,212,139,.7);opacity:0;pointer-events:none;
     will-change:transform,opacity}
   .stage.speaking .avatar::after{animation:halo 1.4s ease-out infinite}
   .stage.speaking .avatar{box-shadow:0 0 0 1px #3c6a58,0 20px 60px rgba(0,0,0,.6),
@@ -311,12 +311,12 @@
 
   // ---------------- 表情切换 ----------------
   /*
-   * 表情切回 Kiwi 版的 SVG 渲染器 + 336px 头像后，建动画的开销大幅下降，
-   * 所以切换延迟从 320ms 收到 100ms（只留一点让 sentence_start 的文本先落屏）。
+   * SVG 渲染器下建动画很快，实测不再出现空脸。用户反馈切换有延迟感，
+   * 所以取消人为延时，llm 情绪事件一到就立刻切。
    * 双层淡入淡出保留：新层画满两帧才交叉，旧层先 pause 再退，
    * 任何时刻画面上都至少有一张脸。
    */
-  var EMO_DELAY_MS = 100;
+  var EMO_DELAY_MS = 0;
   var boxes = [$('flA'), $('flB')];
   var boxIdx = 0;                    // 当前可见的那一层
   var layerAnim = [null, null];      // 每层里装着的 lottie 实例
@@ -387,7 +387,7 @@
     if (name === emoWant) return;
     emoWant = name;
     if (emoSched){ clearTimeout(emoSched); emoSched = null; }
-    if (immediate){ applyEmotion(name); return; }
+    if (immediate || EMO_DELAY_MS <= 0){ applyEmotion(name); return; }
     emoSched = setTimeout(function(){ emoSched = null; applyEmotion(name); },
                           EMO_DELAY_MS);
   }
