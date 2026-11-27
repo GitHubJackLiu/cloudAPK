@@ -3,7 +3,11 @@ name: Build Kiosk APK
 on:
   push:
     branches: [main, master]
+    tags: ['v*']          # 打 v 开头的 tag 时额外发 Release
   workflow_dispatch:
+
+permissions:
+  contents: write         # 创建 Release 需要写权限
 
 jobs:
   build:
@@ -11,6 +15,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 只有打 tag 才注入版本号并标记本次为 release；
+      # 普通 push（含手动触发）保持 1.0 / 1，且不发 Release。
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          set -e
+          REF="${GITHUB_REF}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            TAG="${REF#refs/tags/v}"
+            # 约定 tag 格式 v<major>.<minor>，如 v1.2 / v1.10；
+            # v1.2 -> versionName 1.2, versionCode 102；v1.10 -> 110
+            if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              echo "!! tag '$TAG' 格式不对，应为 v<数字>.<数字>，如 v1.2"; exit 1
+            fi
+            MAJOR="${TAG%%.*}"
+            MINOR="${TAG#*.}"
+            CODE=$((10#$MAJOR * 100 + 10#$MINOR))
+            echo "APP_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+            echo "APP_VERSION_NAME=$TAG" >> "$GITHUB_ENV"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+            echo "version_name=$TAG" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG -> name=$TAG code=$CODE"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "no version tag, defaults 1.0 / 1"
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -79,3 +111,17 @@ jobs:
           name: kiosk-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # 打 tag 时把 APK 连同版本号一起发布到 Releases，
+      # 客户端检查更新读的就是 /releases/latest 的 tag_name 和 browser_download_url。
+      - name: Publish Release
+        if: steps.ver.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            小度 1C 语音助手 APK（versionCode ${{ steps.ver.outputs.version_code }}）
+            签名与 debug 构建一致，可直接覆盖安装。
+          files: app/build/outputs/apk/debug/app-debug.apk
+          fail_on_unmatched_files: true

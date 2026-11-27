@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
     private Bridge bridge;
     private XzSession session;
     private WifiHelper wifi;
+    public UpdateChecker updater;
     private WebViewClient webClient;
     private boolean pageReady = false;
     private String pendingCmd = null;
@@ -68,6 +69,7 @@ public class MainActivity extends Activity {
         aecMode = new AecModeTester(audio);
         session = new XzSession(this, settings, audio);
         wifi = new WifiHelper(this);
+        updater = new UpdateChecker(this);
 
         FrameLayout root = new FrameLayout(this);
         webView = new WebView(this);
@@ -135,6 +137,23 @@ public class MainActivity extends Activity {
         // 默认不自动通话：等用户在界面上点「通话」。
         // 以前这里是 session.startIfReady()，结果是开机就占麦克风、
         // 而且一进桌面就跳出激活码面板。
+
+        // 启动后延迟检查更新：纯网络请求放后台线程，不阻塞页面加载/预热；
+        // 第 3 步只查不装，结果打 logcat（tag XzUpdate），界面暂不改。
+        scheduleAutoUpdateCheck();
+    }
+
+    /** 启动 8 秒后后台检查一次更新；失败静默，绝不影响通话/表情预热。 */
+    private void scheduleAutoUpdateCheck() {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            new Thread(() -> {
+                try {
+                    updater.check();
+                } catch (Throwable t) {
+                    Log.w(TAG, "auto update check failed: " + t);
+                }
+            }, "xz-update-check").start();
+        }, 8000);
     }
 
     // ---------------- 音量 / 亮度（走系统接口，不用遮罩层） ----------------
@@ -455,6 +474,11 @@ public class MainActivity extends Activity {
             return;
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
             pendingCmd = "PANEL";
+        } else if ("com.xiaodu.voice.UPDATE".equals(a)) {
+            // 手动触发更新检查（SSH/adb 自动化用），结果看 logcat tag XzUpdate
+            Log.i(TAG, "cmd: check update now");
+            new Thread(() -> updater.check(), "xz-update-cmd").start();
+            return;
         } else if ("com.xiaodu.voice.DEMO".equals(a)) {
             // 这台设备注入不了语音输入，验证两列气泡落位只能造假事件：
             //   am broadcast -a com.xiaodu.voice.DEMO -n com.xiaodu.voice/.MainActivity \

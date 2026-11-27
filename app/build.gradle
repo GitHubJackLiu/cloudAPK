@@ -2,6 +2,14 @@ plugins {
     id 'com.android.application'
 }
 
+// 版本号由 CI 打 tag 时注入环境变量（tag v1.2 -> versionName 1.2 / versionCode 102）。
+// 本地直接 gradle 编译、或 workflow_dispatch 未打 tag 时回退到默认值，不影响调试。
+// versionCode = major*100 + minor，保证随 tag 数字单调递增，便于客户端比较。
+def ciVersionCode = System.getenv('APP_VERSION_CODE')
+def ciVersionName = System.getenv('APP_VERSION_NAME')
+def appVersionCode = ciVersionCode ? ciVersionCode.toInteger() : 1
+def appVersionName = ciVersionName ? ciVersionName : '1.0'
+
 android {
     namespace 'com.xiaodu.voice'
     compileSdk 34
@@ -11,8 +19,8 @@ android {
         applicationId 'com.xiaodu.voice'
         minSdk 21
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        versionCode appVersionCode
+        versionName appVersionName
 
         // 小度 1C 是纯 32 位设备，只编 armeabi-v7a，
         // 避免把 opus 多编几档白白撑大 APK。

@@ -180,6 +180,24 @@ public class Bridge {
         return act.otaCheck();
     }
 
+    /**
+     * 检查 GitHub Release 更新（第 3 步：只查不装）。
+     * JS 侧用 Promise 包一层即可，因为这是同步网络请求（约 1~3 秒），
+     * 设置页调用时放 WebWorker/异步回调，避免卡住 UI 线程。
+     * 返回 {ok, hasUpdate, localCode, remoteCode, tag, url, ...}。
+     */
+    @JavascriptInterface
+    public String checkUpdate() {
+        return act.updater.check().toString();
+    }
+
+    /** 当前安装版本名（如 1.0），设置页显示用 */
+    @JavascriptInterface
+    public String getAppVersion() {
+        String n = act.updater.localName();
+        return n == null ? "" : n;
+    }
+
     @JavascriptInterface
     public void openWifi() {
         ui.post(() -> act.openSystem("wifi"));
