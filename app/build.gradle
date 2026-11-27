@@ -44,9 +44,25 @@ android {
         }
     }
 
+    // 固定 debug 签名：GitHub Actions 每次 runner 是全新的，默认的
+    // ~/.android/debug.keystore 会重新生成、签名随之改变，导致 OTA 覆盖安装
+    // 报 INSTALL_FAILED_UPDATE_INCOMPATIBLE。把这把 key 提交进仓库，所有构建共用。
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.debug
         }
     }
 
