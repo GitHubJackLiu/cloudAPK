@@ -308,13 +308,20 @@ public class UpdateChecker {
         return sb.toString();
     }
 
-    /** 覆盖安装后拉起新版本：先强制停老进程，再 am start */
+    /**
+     * 覆盖安装后拉起新版本。
+     *
+     * 不能用 am force-stop：实测它会把发起安装的主进程一起停掉，
+     * 而 su 子进程是主进程 fork 的，往往在 force-stop 后拿不到执行机会，
+     * 结果 am start 没跑，设备停在桌面（17:34 实测）。
+     * pm install -r 覆盖安装本身就会让系统在下次启动时换用新代码，
+     * 这里只需 am start 把 Activity 切回前台即可。
+     */
     private void restartApp() {
         new Thread(() -> {
-            try { Thread.sleep(600); } catch (InterruptedException ignored) { }
-            su("am force-stop com.xiaodu.voice; sleep 1; "
-                    + "am start -n com.xiaodu.voice/.MainActivity");
-            Log.i(TAG, "restart issued");
+            try { Thread.sleep(800); } catch (InterruptedException ignored) { }
+            String r = su("am start -n com.xiaodu.voice/.MainActivity");
+            Log.i(TAG, "restart: " + clip(r, 120));
         }, "xz-restart").start();
     }
 
