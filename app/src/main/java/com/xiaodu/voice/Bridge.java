@@ -58,14 +58,19 @@ public class Bridge {
 
     // ---------------- 会话控制 ----------------
 
+    /**
+     * 注意：@JavascriptInterface 的方法跑在 WebView 的 JavaBridge 线程上，
+     * 而 startActivity / requestPermissions / 改 Window 属性都必须回到主线程，
+     * 否则轻则无效重则抛 CalledFromWrongThreadException。
+     */
     @JavascriptInterface
     public void start() {
-        act.startSession();
+        ui.post(act::startSession);
     }
 
     @JavascriptInterface
     public void stop() {
-        act.stopSession();
+        ui.post(act::stopSession);
     }
 
     @JavascriptInterface
@@ -141,7 +146,10 @@ public class Bridge {
             if (o.has("ui")) {
                 JSONObject u = o.getJSONObject("ui");
                 if (u.has("mode")) settings.setUiMode(u.optString("mode"));
-                if (u.has("dim")) act.applyBrightness(u.optInt("dim"));
+                if (u.has("dim")) {
+                    final int dimPct = u.optInt("dim");
+                    ui.post(() -> act.applyBrightness(dimPct));
+                }
                 if (u.has("wakeLock")) settings.setWakeLock(u.optBoolean("wakeLock"));
                 if (u.has("showDebug")) settings.setShowDebug(u.optBoolean("showDebug"));
             }
@@ -174,17 +182,17 @@ public class Bridge {
 
     @JavascriptInterface
     public void openWifi() {
-        act.openSystem("wifi");
+        ui.post(() -> act.openSystem("wifi"));
     }
 
     @JavascriptInterface
     public void openSettings() {
-        act.openSystem("settings");
+        ui.post(() -> act.openSystem("settings"));
     }
 
     @JavascriptInterface
     public void back() {
-        act.goHome();
+        ui.post(act::goHome);
     }
 
     // ---------------- 音量 / 亮度 ----------------
@@ -201,9 +209,9 @@ public class Bridge {
     }
 
     @JavascriptInterface
-    public void setBrightness(int pct) {
+    public void setBrightness(final int pct) {
         settings.setDim(Math.max(4, Math.min(100, pct)));
-        act.applyBrightness(pct);
+        ui.post(() -> act.applyBrightness(pct));
     }
 
     // ---------------- Wi-Fi ----------------
@@ -239,7 +247,7 @@ public class Bridge {
 
     @JavascriptInterface
     public void requestLocation() {
-        act.requestLocationPermission();
+        ui.post(act::requestLocationPermission);
     }
 
     @JavascriptInterface
