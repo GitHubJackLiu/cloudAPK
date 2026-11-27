@@ -149,11 +149,14 @@
   <div class="aectop">
     <h2>AEC 通路实验</h2>
     <button class="abtn" id="aecRun">跑矩阵</button>
+    <button class="abtn" id="aecAb">跑 A/B</button>
     <button class="abtn" id="aecClose">关闭</button>
   </div>
   <div class="note" style="margin-bottom:8px;text-align:left">
     验证原生 VOICE_COMMUNICATION 能否启用 MTK DSP 的硬件 AEC。<br>
-    ERLE = 有测试音时的 1kHz 分量 − 静默本底（组内自比，消掉增益差异）。<br>
+    <b>矩阵</b>：ERLE = 有测试音时的 1kHz 分量 − 静默本底（组内自比，消掉增益差异）。<br>
+    <b>A/B</b>：同一通路下切 HAL 的 aec_mode 开关，ERLE = 关时残余 − 开时残余
+    （增益全控住，差值即 AEC 抑制量，更可信）。<br>
     数值越大说明回声被压得越干净；&lt;5dB 视为无效。
   </div>
   <div id="aecOut" style="flex:1;overflow:auto"></div>
@@ -342,6 +345,9 @@
       case 'aec':
         addAecResult(p);
         break;
+      case 'aecMode':
+        addAecModeResult(p);
+        break;
       case 'aecDone':
         var d = document.createElement('div');
         d.className = 'aresult';
@@ -399,6 +405,33 @@
     if (v === null || v === undefined || isNaN(v)) return '—';
     return Number(v).toFixed(1);
   }
+  function addAecModeResult(p){
+    var d = document.createElement('div');
+    var e = typeof p.erleAvg === 'number' ? p.erleAvg : 0;
+    var cls = 'aresult';
+    if (e >= 6) cls += ' good';
+    else if (e < 3) cls += ' bad';
+    d.className = cls;
+    var txt = '<b>aec_mode A/B 对照</b><br>';
+    txt += '本底 ' + num(p.floorDb) + ' dBFS<br>';
+    txt += 'aec=false 残余 ' + num(p.rawDb) + ' dBFS · aec=true 残余 ' + num(p.aecDb) + ' dBFS<br>';
+    txt += '正序 ' + num(p.erleFwd) + ' dB · 反序 ' + num(p.erleRev) + ' dB · ';
+    txt += '<b>平均 ERLE ' + num(p.erleAvg) + ' dB</b>';
+    if (typeof p.testEnableDb === 'number') txt += '<br>AECREC_TEST_ENABLE=1 → ' + num(p.testEnableDb) + ' dBFS';
+    if (p.readBack) txt += '<br>读回 aec_mode = ' + p.readBack;
+    if (p.note) txt += '<br>' + p.note;
+    d.innerHTML = txt;
+    aecOut.appendChild(d);
+    aecOut.scrollTop = aecOut.scrollHeight;
+  }
+  $('aecAb').onclick = function(){
+    aecOut.innerHTML = '';
+    if (hasNative){
+      try { window.Native.runAecMode(); } catch(e){ note('A/B 测试启动失败'); }
+    } else {
+      aecOut.innerHTML = '<div class="aresult">A/B 实验需要原生环境（Bridge）</div>';
+    }
+  };
   $('aecRun').onclick = function(){
     aecOut.innerHTML = '';
     if (hasNative){
@@ -419,6 +452,14 @@
       try { window.Native.runAecMatrix(); } catch(e){ note('AEC 测试启动失败'); }
     } else {
       aecOut.innerHTML = '<div class="aresult">AEC 实验需要原生环境（Bridge）</div>';
+    }
+  };
+  window.runAecMode = function(){
+    aecOut.innerHTML = '';
+    if (hasNative){
+      try { window.Native.runAecMode(); } catch(e){ note('A/B 测试启动失败'); }
+    } else {
+      aecOut.innerHTML = '<div class="aresult">A/B 实验需要原生环境（Bridge）</div>';
     }
   };
   // 双击齿轮打开 AEC 实验面板（长按也保留，方便手动操作）

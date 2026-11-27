@@ -48,6 +48,7 @@ public class MainActivity extends Activity {
     private Settings settings;
     private AudioEngine audio;
     private AecTester aec;
+    private AecModeTester aecMode;
     private Bridge bridge;
     private XzSession session;
     private WebViewClient webClient;
@@ -62,6 +63,7 @@ public class MainActivity extends Activity {
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         audio = new AudioEngine(am);
         aec = new AecTester(audio, am);
+        aecMode = new AecModeTester(audio, am);
         session = new XzSession(this, settings, audio);
 
         FrameLayout root = new FrameLayout(this);
@@ -116,6 +118,7 @@ public class MainActivity extends Activity {
         });
 
         bridge = new Bridge(this, settings, audio, aec);
+        bridge.setAecModeTester(aecMode);
         session.setBridge(bridge);
         webView.addJavascriptInterface(bridge, "Native");
 
@@ -320,6 +323,11 @@ public class MainActivity extends Activity {
         if ("com.xiaodu.voice.AEC".equals(a)) {
             Log.i(TAG, "cmd: run AEC matrix");
             pendingCmd = "AEC";
+        } else if ("com.xiaodu.voice.AECM".equals(a)) {
+            // A/B 对照实验走原生路径，不依赖网页是否加载完
+            Log.i(TAG, "cmd: run AEC mode A/B");
+            bridge.runAecModeDirect();
+            return;
         } else if ("com.xiaodu.voice.PANEL".equals(a)) {
             pendingCmd = "PANEL";
         } else {

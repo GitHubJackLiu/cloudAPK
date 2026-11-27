@@ -42,6 +42,7 @@ public class Bridge {
     private final AudioEngine audio;
     private final AecTester aec;
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private AecModeTester aecMode;
 
     public Bridge(MainActivity act, Settings settings, AudioEngine audio, AecTester aec) {
         this.act = act;
@@ -49,6 +50,8 @@ public class Bridge {
         this.audio = audio;
         this.aec = aec;
     }
+
+    public void setAecModeTester(AecModeTester t) { this.aecMode = t; }
 
     // ---------------- 会话控制 ----------------
 
@@ -214,6 +217,73 @@ public class Bridge {
     @JavascriptInterface
     public void cancelAec() {
         aec.cancel();
+    }
+
+    /**
+     * AEC 决定性实验：同配置下用 HAL 的 aec_mode 开关做 A/B 对照。
+     * 跨通路矩阵无法回答「硬件 AEC 有没有在抑制回声」，这个才是。
+     */
+    @JavascriptInterface
+    public void runAecMode() {
+        if (aecMode == null) return;
+        new Thread(() -> {
+            AecModeTester.Result r = aecMode.run((res) -> {
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("name", res.name);
+                    o.put("floorDb", res.floorDb);
+                    o.put("rawDb", res.rawDb);
+                    o.put("aecDb", res.aecDb);
+                    o.put("erleFwd", res.erleFwd);
+                    o.put("erleRev", res.erleRev);
+                    o.put("erleAvg", res.erleAvg);
+                    o.put("testEnableDb", res.testEnableDb);
+                    o.put("readBack", res.readBack == null ? "" : res.readBack);
+                    o.put("note", res.note == null ? "" : res.note);
+                } catch (Exception ignored) { }
+                emit("aecMode", o.toString());
+            });
+            emit("aecModeDone", "{}");
+        }, "xz-aecmode").start();
+    }
+
+    /** 原生直接触发 A/B（供 adb / SSH 自动化用） */
+    @JavascriptInterface
+    public void runAecModeNow() {
+        ui.postDelayed(() -> {
+            try {
+                act.webView.evaluateJavascript(
+                        "window.showAecPanel && window.showAecPanel();"
+                                + "window.runAecMode && window.runAecMode()", null);
+            } catch (Throwable t) {
+                Log.w(TAG, "runAecModeNow failed: " + t);
+            }
+        }, 1500);
+    }
+
+    /**
+     * 原生直接跑 A/B，完全不依赖网页加载。
+     * 结果同样写 logcat（tag XzAecMode），自动化脚本只需要读 logcat。
+     */
+    public void runAecModeDirect() {
+        if (aecMode == null) {
+            Log.w(TAG, "aecMode tester not ready");
+            return;
+        }
+        new Thread(() -> {
+            AecModeTester.Result r = aecMode.run(res -> {
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("floorDb", res.floorDb);
+                    o.put("rawDb", res.rawDb);
+                    o.put("aecDb", res.aecDb);
+                    o.put("erleAvg", res.erleAvg);
+                    o.put("note", res.note == null ? "" : res.note);
+                } catch (Exception ignored) { }
+                emit("aecMode", o.toString());
+            });
+            Log.i(TAG, "A/B done: " + r.note);
+        }, "xz-aecmode").start();
     }
 
     /**

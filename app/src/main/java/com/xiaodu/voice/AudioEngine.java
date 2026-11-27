@@ -97,6 +97,53 @@ public class AudioEngine {
      */
     public void setCaptureOnly(boolean c) { this.captureOnly = c; }
 
+    /**
+     * MTK HAL 的 AEC 强制开关。
+     *
+     * audio.primary.mt8167.so 里 AudioALSACaptureHandlerAEC::setParameters 认得
+     * "aec_mode" 这个 key，取值 true/false。HAL 内部会：
+     *   mForceAECRec=1 → AudioSpeechEnhanceInfo::SetForceAECRec(true)
+     *   → 日志 "AECOn, need reopen the capture handle" / "open AEC even record is already start"
+     * 也就是说这是一个「让已经打开的采集句柄重新以 AEC 方式打开」的开关，
+     * 必须在 AudioRecord 已经 startRecording 之后再下发才有效。
+     *
+     * 注意：AudioManager.setParameters 的 key/value 拆分在 framework 层完成，
+     * 这里必须写成 "aec_mode=true" 这种带等号的整串。
+     */
+    public void setHalAecMode(boolean on) {
+        String kv = "aec_mode=" + (on ? "true" : "false");
+        try {
+            audioManager.setParameters(kv);
+            Log.i(TAG, "setParameters(" + kv + ") ok");
+        } catch (Throwable t) {
+            Log.e(TAG, "setParameters(" + kv + ") failed", t);
+        }
+    }
+
+    /**
+     * 调试用：下发任意一组 HAL 参数。
+     * AECREC_TEST_ENABLE 是 HAL 里另一个 AEC 相关开关（AudioParamParser 解析的
+     * 自定义参数），与 aec_mode 是两条独立路径，都试一遍。
+     */
+    public void setHalParam(String kv) {
+        try {
+            audioManager.setParameters(kv);
+            Log.i(TAG, "setParameters(" + kv + ") ok");
+        } catch (Throwable t) {
+            Log.e(TAG, "setParameters(" + kv + ") failed", t);
+        }
+    }
+
+    /** 读回 HAL 参数（用于确认 aec_mode 是否真的被 HAL 收到） */
+    @SuppressWarnings("deprecation")
+    public String getHalParam(String key) {
+        try {
+            return String.valueOf(audioManager.getParameters(key));
+        } catch (Throwable t) {
+            return "err: " + t;
+        }
+    }
+
     public int getLevel() { return level; }
     public boolean isRunning() { return running; }
 

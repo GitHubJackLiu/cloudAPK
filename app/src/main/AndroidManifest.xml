@@ -44,6 +44,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.xiaodu.voice.AEC" />
+                <action android:name="com.xiaodu.voice.AECM" />
                 <action android:name="com.xiaodu.voice.PANEL" />
             </intent-filter>
         </receiver>
