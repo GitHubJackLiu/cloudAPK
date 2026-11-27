@@ -66,6 +66,8 @@ public class AudioEngine {
     private volatile boolean prefSpeaker;       // 把下行 track 钉在内置扬声器
     private volatile int muted;             // 1=暂停上行（半双工）
     private volatile int level;             // 采集电平 0~100
+    private volatile long wrBytes;          // 已写入下行 track 的字节数（诊断）
+    private volatile long wrBlocks;         // 已写入的下行块数（诊断）
 
     /*
      * 默认通路：VOICE_RECOGNITION 采集 + MEDIA 播放 + NORMAL 模式。
@@ -172,6 +174,8 @@ public class AudioEngine {
 
     public int getLevel() { return level; }
     public boolean isRunning() { return running; }
+    public long getWrittenBytes() { return wrBytes; }
+    public long getWrittenBlocks() { return wrBlocks; }
 
     /** 半双工：TTS 播放期间暂停上行 */
     public void setMuted(boolean m) { this.muted = m ? 1 : 0; }
@@ -398,21 +402,39 @@ public class AudioEngine {
     /** 下行播放循环 */
     private void writeLoop() {
         while (running) {
-            PcmSource s = source;
-            byte[] data = (s == null) ? null : s.take();
-            if (data == null || data.length == 0) {
-                try { Thread.sleep(5); } catch (InterruptedException ignored) { return; }
-                continue;
-            }
-            AudioTrack t = track;
-            if (t == null) break;
-            int off = 0;
-            while (off < data.length && running) {
-                int n = t.write(data, off, data.length - off);
-                if (n <= 0) break;
-                off += n;
+            try {
+                PcmSource s = source;
+                byte[] data = (s == null) ? null : s.take();
+                if (data == null || data.length == 0) {
+                    try { Thread.sleep(5); } catch (InterruptedException ignored) { return; }
+                    continue;
+                }
+                AudioTrack t = track;
+                if (t == null) break;
+                int off = 0;
+                int total = 0;
+                while (off < data.length && running) {
+                    int n = t.write(data, off, data.length - off);
+                    if (n <= 0) {
+                        Log.w(TAG, "track.write returned " + n + " (off=" + off
+                                + "/" + data.length + " state=" + t.getPlayState() + ")");
+                        break;
+                    }
+                    off += n;
+                    total += n;
+                }
+                if (total > 0) {
+                    wrBytes += total;
+                    wrBlocks++;
+                }
+            } catch (Throwable e) {
+                // 写线程绝不能静默退出：一旦死了，整个下行就永久静音，
+                // 而日志里什么都看不到。
+                Log.e(TAG, "writeLoop error", e);
+                try { Thread.sleep(20); } catch (InterruptedException ignored) { return; }
             }
         }
+        Log.w(TAG, "writeLoop exited (running=" + running + ")");
     }
 
 /**

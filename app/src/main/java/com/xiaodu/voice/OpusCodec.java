@@ -33,7 +33,17 @@ public class OpusCodec {
     private static long enc = 0;
     private static long dec = 0;
     private static final byte[] encOut = new byte[MAX_PACKET];
-    private static final byte[] decOut = new byte[FRAME_SAMPLES * 2 * 2];
+
+    /*
+     * 下行解码输出容量。
+     *
+     * 这里必须比「一帧」宽松：opus_decode 的 frame_size 是**输出缓冲容量**，
+     * 若包内实际时长大于它，opus 会直接返回 OPUS_BUFFER_TOO_SMALL(-2)，
+     * 整包丢弃。服务端如果打包成 2×30ms 或 120ms，960 就不够了。
+     * 按 120ms@16k = 1920 采样留足，实际返回多少就播多少。
+     */
+    private static final int DEC_MAX_SAMPLES = FRAME_SAMPLES * 2;      // 1920
+    private static final byte[] decOut = new byte[DEC_MAX_SAMPLES * 2];
 
     static {
         try {
@@ -76,17 +86,26 @@ public class OpusCodec {
     }
 
     /**
-     * 解码一帧 opus → PCM16（16k 单声道，最多 960 采样）。
+     * 解码一帧 opus → PCM16（16k 单声道，最多 1920 采样 = 120ms）。
      * 失败返回 null。
      */
     public static synchronized byte[] decode(byte[] opus) {
         if (!available() || opus == null) return null;
-        int n = nativeDecode(dec, opus, opus.length, decOut, FRAME_SAMPLES);
-        if (n <= 0) return null;
+        int n = nativeDecode(dec, opus, opus.length, decOut, DEC_MAX_SAMPLES);
+        if (n <= 0) {
+            lastError = n;
+            return null;
+        }
+        lastSamples = n;
         byte[] out = new byte[n * 2];
         System.arraycopy(decOut, 0, out, 0, n * 2);
         return out;
     }
+
+    /** 最近一次 decode 的返回值（<=0 即错误码），诊断用 */
+    public static volatile int lastError = 0;
+    /** 最近一次 decode 成功解出的采样数，诊断用 */
+    public static volatile int lastSamples = 0;
 
     /** 释放编解码器（退出时调用） */
     public static synchronized void release() {

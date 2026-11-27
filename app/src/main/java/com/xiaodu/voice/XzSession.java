@@ -179,12 +179,19 @@ public class XzSession {
             udp = new DatagramSocket();
             new Thread(this::udpRx, "xz-udp-rx").start();
             new Thread(this::udpTx, "xz-udp-tx").start();
+            new Thread(this::dbgLoop, "xz-dbg").start();
 
             // 采集
             if (!audio.start()) {
                 emit("error", "{\"text\":\"音频启动失败\"}");
                 return;
             }
+            // 自检音：确认「引擎 track → 扬声器」这条物理通路本身是通的。
+            // 诊断期保留，跑通后删掉。
+            new Thread(() -> {
+                try { Thread.sleep(600); } catch (InterruptedException ignored) { }
+                audio.playToneOnEngineTrack(1000, 300, 9000);
+            }, "xz-beep").start();
             armed = true;
             sendListen("start");
             emit("ready", "{\"mode\":\"xiaozhi\",\"downRate\":" + downRate + "}");
@@ -445,29 +452,84 @@ public class XzSession {
                 udp.receive(p);
                 byte[] data = p.getData();
                 int len = p.getLength();
-                if (len < 16 || (data[0] & 0xff) != 0x01) continue;
+                rxTotal++;
+                if (rxTotal <= 3) {
+                    Log.i(TAG, "rxpkt#" + rxTotal + " len=" + len + " hdr="
+                            + hexOf(data, Math.min(16, len)));
+                }
+                if (len < 16) { rxCandDrop++; continue; }
+                if ((data[0] & 0xff) != 0x01) {
+                    rxCandDrop++;
+                    if (rxBadType < 5) {
+                        Log.w(TAG, "rx 非音频包头 type=0x"
+                                + Integer.toHexString(data[0] & 0xff)
+                                + " len=" + len + " hdr=" + hexOf(data, 16));
+                        rxBadType++;
+                    }
+                    continue;
+                }
                 int plen = ((data[2] & 0xff) << 8) | (data[3] & 0xff);
-                if (len != 16 + plen) continue;
                 int seq = ((data[12] & 0xff) << 24) | ((data[13] & 0xff) << 16)
                         | ((data[14] & 0xff) << 8) | (data[15] & 0xff);
-                if (lastSeq != 0 && !((seq - lastSeq) > 0 && (seq - lastSeq) < 0x80000000)) {
-                    continue;                       // 重复/乱序包丢掉
+                lastSeqSeen = seq;
+                if (plen <= 0 || 16 + plen > len) {
+                    rxBadLen++;
+                    if (rxBadLen < 5) {
+                        Log.w(TAG, "rx 长度不符 plen=" + plen + " len=" + len
+                                + " seq=" + seq);
+                    }
+                    continue;
                 }
+                // 只丢完全重复的包；乱序也照播，宁可轻微错序也别整段静音
+                if (seq == lastSeq) { rxSeqDrop++; continue; }
+                lastSeq = seq;
                 byte[] plain = AesCtr.decrypt(aesKey, Arrays.copyOfRange(data, 0, 16),
-                        Arrays.copyOfRange(data, 16, len));
-                if (plain == null) continue;
-                // 解码器建在 16k，服务端 24k 编码的流直接解成 16k，
-                // 播放端 AudioTrack 与采集同为 16k，不需要重采样。
+                        Arrays.copyOfRange(data, 16, 16 + plen));
+                if (plain == null) { rxDecNull++; continue; }
                 byte[] pcm = OpusCodec.decode(plain);
-                if (pcm != null) {
-                    lastSeq = seq;
-                    downCount++;
-                    if (downQ.offer(pcm)) { /* ok */ }
-                    else downQ.poll();             // 拥塞丢最老的
+                if (pcm == null) {
+                    rxOpNull++;
+                    if (rxOpNull < 5) {
+                        Log.w(TAG, "opus decode 失败 err=" + OpusCodec.lastError
+                                + " plen=" + plen + " plain0=" + hexOf(plain, 8));
+                    }
+                    continue;
                 }
+                rxOk++;
+                downCount++;
+                if (!downQ.offer(pcm)) downQ.poll();   // 拥塞丢最老的
             } catch (Throwable t) {
                 if (!running.get()) break;
+                rxErr++;
             }
+        }
+    }
+
+    /** 诊断计数器 */
+    private volatile int rxTotal, rxCandDrop, rxBadType, rxBadLen, rxSeqDrop;
+    private volatile int rxDecNull, rxOpNull, rxOk, rxErr;
+    private volatile int lastSeqSeen = -1;
+
+    private static String hexOf(byte[] b, int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n && i < b.length; i++) {
+            sb.append(String.format("%02x", b[i] & 0xff));
+        }
+        return sb.toString();
+    }
+
+    /** 每 2 秒把链路各段计数打一遍，定位「包到没到/解码成不成/写没写进去」 */
+    private void dbgLoop() {
+        while (running.get()) {
+            try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
+            if (!running.get()) break;
+            Log.i(TAG, "dbg udp=" + rxTotal + " dropType=" + rxCandDrop
+                    + "/" + rxBadType + " badLen=" + rxBadLen + " dup=" + rxSeqDrop
+                    + " decNull=" + rxDecNull + " opNull=" + rxOpNull
+                    + " ok=" + rxOk + " err=" + rxErr + " seq=" + lastSeqSeen
+                    + " q=" + downQ.size() + " wrBlk=" + audio.getWrittenBlocks()
+                    + " wrKB=" + (audio.getWrittenBytes() / 1024)
+                    + " lastN=" + OpusCodec.lastSamples);
         }
     }
 
